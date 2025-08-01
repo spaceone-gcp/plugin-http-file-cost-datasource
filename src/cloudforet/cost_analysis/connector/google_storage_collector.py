@@ -1,13 +1,15 @@
-import os
 import logging
-import pandas as pd
-import numpy as np
+import os
 import tempfile
 from typing import List
+
 import google.oauth2.service_account
+import numpy as np
+import pandas as pd
 from google.cloud import storage
-from cloudforet.cost_analysis.error import *
 from spaceone.core.connector import BaseConnector
+
+from cloudforet.cost_analysis.error import *
 
 _PAGE_SIZE = 1000
 
@@ -35,9 +37,15 @@ class GoogleStorageConnector(BaseConnector):
     def get_cost_data(self, bucket_name: str):
 
         bucket = self.client.get_bucket(bucket_name)
+        _LOGGER.debug(f'bucket: {bucket}')
         blob_names = [blob.name for blob in bucket.list_blobs()]
-
-        for blob_name in blob_names:
+        _LOGGER.debug(f'blob_names: {blob_names}')
+        
+        # CSV 파일만 필터링 (디렉토리 제외)
+        csv_blob_names = [name for name in blob_names if name.endswith('.csv')]
+        _LOGGER.debug(f'csv_blob_names: {csv_blob_names}')
+        
+        for blob_name in csv_blob_names:
             blob = bucket.get_blob(blob_name)
 
             if blob:
