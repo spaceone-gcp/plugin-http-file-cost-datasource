@@ -1,0 +1,5 @@
+{"cost": 500, "currency": "USD", "usage_quantity": 4755208, "provider": "csv", "region_code": "ap-northeast2", "product": "AmazonEC2", "account": "123456789", "year": 2023, "month": 9, "day": 1}
+{"cost": 100, "currency": "USD", "usage_quantity": 890010, "provider": "csv", "region_code": "ap-northeast2", "product": "AmazonEC2", "account": "123456789", "year": 2023, "month": 9, "day": 2}
+{"cost": 800, "currency": "USD", "usage_quantity": 7212305, "provider": "csv", "region_code": "ap-northeast2", "product": "AmazonEC2", "account": "123456789", "year": 2023, "month": 9, "day": 3}
+{"cost": 300, "currency": "USD", "usage_quantity": 321200, "provider": "csv", "region_code": "ap-northeast2", "product": "AmazonEC2", "account": "123456789", "year": 2023, "month": 9, "day": 4}
+{"cost": 400, "currency": "USD", "usage_quantity": 411200, "provider": "csv", "region_code": "ap-northeast2", "product": "AmazonEC2", "account": "123456789", "year": 2023, "month": 9, "day": 5}
