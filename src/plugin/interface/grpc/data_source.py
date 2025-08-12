@@ -1,8 +1,8 @@
 from spaceone.api.cost_analysis.plugin import data_source_pb2, data_source_pb2_grpc
 from spaceone.core.pygrpc import BaseAPI
-from cloudforet.cost_analysis.service.data_source_service import DataSourceService
-from cloudforet.cost_analysis.info.data_source_info import PluginInfo
-from cloudforet.cost_analysis.info.common_info import EmptyInfo
+from plugin.service.data_source_service import DataSourceService
+from plugin.info.data_source_info import PluginInfo
+from plugin.info.common_info import EmptyInfo
 
 
 class DataSource(BaseAPI, data_source_pb2_grpc.DataSourceServicer):

@@ -2,8 +2,8 @@ import logging
 
 from spaceone.core.error import ERROR_REQUIRED_PARAMETER
 from spaceone.core.manager import BaseManager
-from cloudforet.cost_analysis.model.job_model import Tasks
-from cloudforet.cost_analysis.connector.http_file_connector import HTTPFileConnector
+from plugin.model.job_model import Tasks
+from plugin.connector.http_file_connector import HTTPFileConnector
 
 _LOGGER = logging.getLogger(__name__)
 

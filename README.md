@@ -27,6 +27,50 @@ you can check the actual usage in [4) How to use](#4-how-to-use).
   * If there is no `billed_date` field and there are `year` and `month`, `day` is applied as 1 day.
   * Does not work except for the above cases.
 
+### Supported CSV Formats
+
+* **Delimiters**: The plugin automatically detects common delimiters including comma (,), semicolon (;), tab (\t), and pipe (|)
+* **Encoding**: UTF-8, UTF-8-BOM, and other encodings are automatically detected
+* **Headers**: CSV files must have a header row with column names
+* **Data Requirements**: Files must contain at least one data row (not just headers)
+
+### Error Handling
+
+The plugin includes robust error handling for common CSV parsing issues:
+
+* **Empty Files**: Returns clear error message when files contain no data
+* **Missing Headers**: Detects and reports files without proper column headers
+* **Invalid Delimiters**: Automatically detects and uses appropriate delimiters
+* **Encoding Issues**: Handles various character encodings gracefully
+* **Malformed Data**: Skips bad lines and continues processing valid data
+* **File Download Issues**: Validates file downloads and reports failures
+* **Temporary File Management**: Automatically cleans up temporary files after processing
+* **Filename Sanitization**: Handles special characters and long filenames safely
+
+### Recent Improvements
+
+The plugin has been enhanced with better file handling capabilities:
+
+* **Enhanced File Validation**: 
+  - Validates file downloads before processing
+  - Checks file size to ensure non-empty files
+  - Provides detailed error messages for file-related issues
+
+* **Improved Filename Handling**:
+  - Safely handles filenames with special characters
+  - Uses hash-based naming for very long filenames
+  - Prevents file system compatibility issues
+
+* **Automatic Resource Cleanup**:
+  - Automatically removes temporary files after processing
+  - Prevents disk space accumulation
+  - Includes error handling for cleanup operations
+
+* **Better Error Reporting**:
+  - More specific error messages for different failure scenarios
+  - Detailed logging for debugging file processing issues
+  - Clear distinction between different types of file errors
+
 <br>
 
 * **cost (required)**
@@ -216,3 +260,83 @@ options:
 ```shell
 $ spacectl exec sync cost-analysis.DataSource -p data_source_id=<data_source_id>
 ```
+
+## 5) Troubleshooting
+
+### Common Error Messages and Solutions
+
+#### ERROR_EMPTY_FILE: File is empty
+**Cause**: The downloaded file contains no data or has zero bytes. This can occur due to:
+- Empty blob in Google Cloud Storage
+- Failed file download
+- Corrupted file during transfer
+- File path issues with special characters
+
+**Solution**: 
+- Check if the source file actually contains data
+- Verify the URL is accessible and returns content
+- Ensure the file format is supported (CSV or JSON)
+- Check the blob size in Google Cloud Storage
+- Verify file permissions and access rights
+- Look for detailed error logs that include blob information and file paths
+
+#### ERROR_NO_DATA_ROWS: File has no data rows
+**Cause**: The file contains only headers or is malformed.
+**Solution**:
+- Verify the file has at least one data row after the header
+- Check if the file format is correct
+- Ensure proper line endings
+
+#### ERROR_EMPTY_HEADER: Empty header line
+**Cause**: The first line of the file is empty or contains only whitespace.
+**Solution**:
+- Check the file structure and ensure the first line contains column headers
+- Remove any empty lines at the beginning of the file
+
+#### ERROR_NO_DATA_FOUND: No data found in CSV file
+**Cause**: The file was parsed but no valid data records were found.
+**Solution**:
+- Verify the file contains valid data rows
+- Check for encoding issues
+- Ensure the delimiter is correctly detected
+
+#### ERROR_NO_COLUMNS: No columns to parse from file
+**Cause**: The file has no recognizable column structure.
+**Solution**:
+- Check if the file is in the correct format
+- Verify the delimiter is supported (comma, semicolon, tab, pipe)
+- Ensure the file is not corrupted
+
+#### ERROR_CSV_PARSING: CSV parsing error
+**Cause**: The file format is not compatible with CSV parsing.
+**Solution**:
+- Check if the file is actually a CSV file
+- Verify the encoding (UTF-8 recommended)
+- Look for malformed lines or special characters
+
+### Debugging Tips
+
+1. **Check Logs**: Look for detailed error messages in the plugin logs that now include:
+   - Blob information (size, content type, name)
+   - File path details and safe filename generation
+   - Download status and file existence checks
+   - Temp directory information
+
+2. **Verify File Access**: Ensure the plugin can access the file URL or Google Cloud Storage bucket
+
+3. **Test File Format**: Try opening the file in a text editor to verify its structure
+
+4. **Check File Size**: Ensure the file is not empty or corrupted
+
+5. **Validate Encoding**: Make sure the file uses a supported encoding (UTF-8 recommended)
+
+6. **Google Cloud Storage Specific**:
+   - Verify blob exists and has content
+   - Check bucket permissions and access rights
+   - Ensure blob name doesn't contain problematic characters
+   - Verify the blob is not a directory marker
+
+7. **File Path Issues**: 
+   - Check for special characters in file names
+   - Verify temp directory permissions
+   - Look for path length limitations

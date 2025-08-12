@@ -1,7 +1,7 @@
 import logging
 
 from spaceone.core.service import *
-from cloudforet.cost_analysis.manager.cost_manager import CostManager
+from plugin.manager.cost_manager import CostManager
 
 _LOGGER = logging.getLogger(__name__)
 

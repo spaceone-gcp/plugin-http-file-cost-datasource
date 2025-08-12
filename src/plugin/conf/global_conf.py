@@ -1,3 +1,5 @@
+SERVICE = "plugin"
+
 CONNECTORS = {"HTTPFileConnector": {}}
 
 LOG = {
