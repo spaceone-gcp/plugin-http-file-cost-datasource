@@ -14,113 +14,197 @@ _REQUIRED_FIELDS = ["cost", "currency", "billed_date"]
 
 
 class CostManager(BaseManager):
+    """
+    비용 데이터를 관리하는 매니저 클래스
+    
+    HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집하고,
+    SpaceONE에서 요구하는 포맷으로 변환하는 역할을 담당합니다.
+    """
+    
     def __init__(self, *args, **kwargs):
+        """
+        CostManager 초기화
+        
+        Args:
+            *args: 부모 클래스 인자
+            **kwargs: 부모 클래스 키워드 인자
+        """
         super().__init__(*args, **kwargs)
-        self.default_vars = None
-        self.field_mapper = None
-        self.type_mapper = None
+        self.default_vars = None  # 기본 변수 설정
+        self.field_mapper = None  # 필드 매핑 설정
+        self.type_mapper = None   # 타입 매핑 설정
 
     def get_data(self, options, secret_data, schema, task_options):
-        start_time = time.time()
-        _LOGGER.debug(
-            f"[get_data] Start Collecting Cost Data (task_options={task_options})"
-        )
+        """
+        외부 비용 데이터를 수집하여 SpaceONE 비용 데이터 포맷으로 변환하는 메인 함수
 
+        이 함수는 HTTP 파일 또는 Google Cloud Storage에서 비용 데이터를 읽어와
+        SpaceONE에서 요구하는 포맷으로 변환하여 제너레이터로 반환합니다.
+
+        데이터 소스는 task_options 또는 options의 base_url, bucket_name에 따라 결정됩니다.
+
+        Args:
+            options (dict): 플러그인 옵션 (base_url, field_mapper, default_vars, type_mapper 등)
+            secret_data (dict): 인증 정보
+            schema (str): 스키마 정보 (선택)
+            task_options (dict): 작업별 옵션 (base_url 또는 bucket_name)
+
+        Yields:
+            dict: {"results": [비용 데이터 리스트]}
+        Raises:
+            ValueError: 데이터 소스 정보가 없을 때
+        """
+        # 1. 함수 시작 시점의 시간 기록 (성능 측정용)
+        start_time = time.time()
+        
+        # 2. 처리 카운트 초기화
+        total_processed_count = 0
+
+        # 3. 옵션에서 default_vars가 있으면 적용
         if "default_vars" in options:
             self.default_vars = options["default_vars"]
             _LOGGER.debug(f"[get_data] apply default vars: {self.default_vars}")
 
+        # 4. 옵션에서 field_mapper가 있으면 적용
         if "field_mapper" in options:
             self.field_mapper = options["field_mapper"]
             _LOGGER.debug(f"[get_data] apply field mapper: {self.field_mapper}")
 
+        # 5. 옵션에서 type_mapper가 있으면 적용
         if "type_mapper" in options:
             self.type_mapper = options["type_mapper"]
 
+        # 6. task_options가 None이면 빈 dict로 대체
         if task_options is None:
             task_options = {}
 
+        # 7. 데이터 소스 결정: task_options에 base_url이 있으면 HTTP 파일에서 수집
         if "base_url" in task_options:
             base_url = task_options["base_url"]
+            # 7-1. HTTPFileConnector 인스턴스 생성 및 세션 생성
             http_file_connector = self.locator.get_connector(HTTPFileConnector)
             http_file_connector.create_session(options, secret_data, schema)
+            # 7-2. 비용 데이터 스트림 생성
             response_stream = http_file_connector.get_cost_data(base_url)
+        # 8. task_options에 bucket_name이 있으면 Google Cloud Storage에서 수집
         elif "bucket_name" in task_options:
-            # just for Google Cloud Storage
+            # 8-1. Google Cloud Storage용 처리
             bucket_name = task_options["bucket_name"]
             storage_connector = self.locator.get_connector(
                 GoogleStorageConnector, secret_data=secret_data
             )
             response_stream = storage_connector.get_cost_data(bucket_name)
-            _LOGGER.debug(f"[get_data] get cost data from {bucket_name} bucket")
         else:
-            # fallback to options.base_url if task_options is empty
+            # 9. 위 조건이 모두 없으면 options.base_url로 fallback
             if "base_url" in options:
                 base_url = options["base_url"]
                 http_file_connector = self.locator.get_connector(HTTPFileConnector)
                 http_file_connector.create_session(options, secret_data, schema)
                 response_stream = http_file_connector.get_cost_data(base_url)
             else:
+                # 10. 모든 경로가 없으면 예외 발생
                 raise ValueError("Either task_options.base_url, task_options.bucket_name, or options.base_url must be provided")
 
+        # 11. 데이터 스트림에서 결과를 하나씩 받아서 가공 후 yield
         for results in response_stream:
+            # 11-1. 원본 데이터를 SpaceONE 비용 데이터 포맷으로 변환
             costs_data = self._make_cost_data(results)
+            # 11-2. 처리된 데이터 개수 카운트
+            total_processed_count += len(costs_data)
+            # 11-3. 변환된 데이터를 제너레이터로 반환
             yield {"results": costs_data}
 
-        _LOGGER.debug(
-            f"[collector_collect] Finished Collecting Cost Data"
-            f"(duration: {time.time() - start_time:.2f}s)"
-        )
+        # 12. 전체 처리 시간 및 처리 카운트 로깅
+        _LOGGER.debug(f"duration: {time.time() - start_time:.2f}s, total_processed_count: {total_processed_count}")
 
     def _make_cost_data(self, results):
+        """
+        입력된 원본 비용 데이터(results)를 SpaceONE 비용 데이터 포맷에 맞게 변환하는 함수
+
+        이 함수는 원본 데이터를 받아서 다음과 같은 단계로 처리합니다:
+        1. 키와 값에 strip 적용
+        2. field_mapper를 통한 필드 변환
+        3. default_vars 적용
+        4. type_mapper 적용
+        5. billed_date 생성 및 포맷 변환
+        6. cost, usage_quantity 타입 변환
+        7. 필수 필드 검증
+        8. SpaceONE 포맷으로 최종 변환
+
+        Args:
+            results (list[dict]): 원본 비용 데이터 리스트
+
+        Returns:
+            list[dict]: SpaceONE 비용 데이터 포맷으로 변환된 리스트
+        """
         costs_data = []
+        # 1. results 리스트 순회
         for result in results:
+            # 2. 키에 strip 적용
             result = self._apply_strip_to_dict_keys(result)
+            
+            # 3. 값에 strip 적용
             result = self._apply_strip_to_dict_values(result)
 
+            # 4. field_mapper 적용
             if self.field_mapper:
                 result = self._change_result_by_field_mapper(result)
 
+            # 5. default_vars 적용
             if self.default_vars:
                 self._set_default_vars(result)
 
+            # 6. type_mapper 적용
             if self.type_mapper:
                 self._set_type_mapper(result)
 
+            # 7. billed_date 생성 및 포맷 변환
             self._create_billed_date(result)
 
-            if not self._convert_cost_and_usage_quantity_types(result):
+            # 8. cost, usage_quantity 타입 변환 실패 시 또는 필수값 없으면 건너뜀
+            if not self._convert_cost_and_usage_quantity_types(result) or not self._exist_cost_and_usage_quantity(result):
                 continue
 
-            if not self._exist_cost_and_usage_quantity(result):
-                continue
-
+            # 9. 필수 필드 체크
             self._check_required_fields(result)
 
             try:
+                # 10. SpaceONE 비용 데이터 포맷에 맞게 딕셔너리 생성
                 data = {
-                    "cost": result["cost"],
-                    "usage_quantity": result.get("usage_quantity", 0),
-                    "usage_type": result.get("usage_type"),
-                    "usage_unit": result.get("usage_unit"),
-                    "provider": result.get("provider"),
-                    "region_code": result.get("region_code"),
-                    "product": result.get("product"),
-                    "resource": result.get("resource", ""),
-                    "billed_date": result["billed_date"],
-                    "additional_info": result.get("additional_info", {}),
-                    "tags": result.get("tags", {}),
+                    "cost": result["cost"],  # 비용 금액 (필수)
+                    "usage_quantity": result.get("usage_quantity", 0),  # 사용량 (기본값 0)
+                    "usage_type": result.get("usage_type"),  # 사용 유형 (선택)
+                    "usage_unit": result.get("usage_unit"),  # 사용 단위 (선택)
+                    "provider": result.get("provider"),  # 클라우드 제공자 (선택)
+                    "region_code": result.get("region_code"),  # 리전 코드 (선택)
+                    "product": result.get("product"),  # 제품명 (선택)
+                    "resource": result.get("resource", ""),  # 리소스명 (기본값 빈 문자열)
+                    "billed_date": result["billed_date"],  # 청구 날짜 (필수)
+                    "additional_info": result.get("additional_info", {}),  # 추가 정보 (기본값 빈 dict)
+                    "tags": result.get("tags", {}),  # 태그 정보 (기본값 빈 dict)
                 }
 
             except Exception as e:
+                # 11. 데이터 생성 중 오류 발생 시 로깅 후 예외 재발생
                 _LOGGER.error(f"[_make_cost_data] make data error: {e}", exc_info=True)
                 raise e
 
+            # 12. 변환된 데이터 리스트에 추가
             costs_data.append(data)
+        # 13. 최종 변환된 데이터 리스트 반환
         return costs_data
 
     @staticmethod
     def _apply_strip_to_dict_keys(result):
+        """
+        딕셔너리의 모든 키에 strip()을 적용하여 앞뒤 공백을 제거하는 함수
+        
+        Args:
+            result (dict): 처리할 딕셔너리
+            
+        Returns:
+            dict: 키가 strip된 딕셔너리
+        """
         for key in list(result.keys()):
             new_key = key.strip()
             if new_key != key:
@@ -130,12 +214,33 @@ class CostManager(BaseManager):
 
     @staticmethod
     def _apply_strip_to_dict_values(result):
+        """
+        딕셔너리의 모든 문자열 값에 strip()을 적용하여 앞뒤 공백을 제거하는 함수
+        
+        Args:
+            result (dict): 처리할 딕셔너리
+            
+        Returns:
+            dict: 값이 strip된 딕셔너리
+        """
         for key, value in result.items():
             if isinstance(value, str):
                 result[key] = value.strip()
         return result
 
     def _change_result_by_field_mapper(self, result):
+        """
+        field_mapper 설정에 따라 딕셔너리의 키를 변환하는 함수
+        
+        field_mapper는 원본 필드명을 SpaceONE 필드명으로 매핑하는 설정입니다.
+        additional_info 필드의 경우 중첩된 딕셔너리로 처리할 수 있습니다.
+        
+        Args:
+            result (dict): 변환할 딕셔너리
+            
+        Returns:
+            dict: 필드가 매핑된 딕셔너리
+        """
         for origin_field, actual_field in self.field_mapper.items():
             if isinstance(actual_field, str):
                 if actual_field in result:
@@ -157,6 +262,25 @@ class CostManager(BaseManager):
         return result
 
     def _create_billed_date(self, result):
+        """
+        billed_date 필드를 생성하거나 포맷을 변환하는 함수
+        
+        다음과 같은 순서로 billed_date를 처리합니다:
+        1. 기존 billed_date가 있으면 포맷 변환
+        2. Google Cloud Billing Export의 invoice.month 필드 처리 (평면화된 형태)
+        3. Google Cloud Billing Export의 invoice.month 필드 처리 (딕셔너리 형태)
+        4. year, month 필드 조합으로 생성
+        5. 모든 조건이 만족되지 않으면 예외 발생
+        
+        Args:
+            result (dict): 처리할 딕셔너리
+            
+        Returns:
+            dict: billed_date가 설정된 딕셔너리
+            
+        Raises:
+            ERROR_EMPTY_BILLED_DATE: 유효한 날짜 필드를 찾을 수 없을 때
+        """
         if self._exist_billed_date(result):
             billed_date = result["billed_date"]
             billed_date = self._apply_parse_date(billed_date)
@@ -211,6 +335,21 @@ class CostManager(BaseManager):
 
     @staticmethod
     def _exist_billed_date(result):
+        """
+        billed_date 필드가 존재하는지 확인하는 함수
+        
+        billed_date, year/month, invoice.month 중 하나라도 있으면 True를 반환합니다.
+        모든 날짜 필드가 없으면 예외를 발생시킵니다.
+        
+        Args:
+            result (dict): 확인할 딕셔너리
+            
+        Returns:
+            bool: billed_date가 존재하면 True, year/month나 invoice.month가 있으면 False
+            
+        Raises:
+            ERROR_EMPTY_BILLED_DATE: 모든 날짜 필드가 없을 때
+        """
         if result.get("billed_date"):
             return True
         elif result.get("year") and result.get("month"):
@@ -225,6 +364,18 @@ class CostManager(BaseManager):
 
     @staticmethod
     def _apply_parse_date(date):
+        """
+        날짜 문자열을 파싱하여 datetime 객체로 변환하는 함수
+        
+        Args:
+            date (str): 파싱할 날짜 문자열
+            
+        Returns:
+            datetime: 파싱된 날짜 객체
+            
+        Raises:
+            TypeError: 날짜 파싱에 실패했을 때
+        """
         try:
             parsed_date = parse(date)
             return parsed_date
@@ -233,11 +384,28 @@ class CostManager(BaseManager):
             raise e
 
     def _set_default_vars(self, result):
+        """
+        default_vars 설정에 따라 딕셔너리에 기본값을 설정하는 함수
+        
+        Args:
+            result (dict): 기본값을 설정할 딕셔너리
+        """
         for key, value in self.default_vars.items():
             result[key] = value
 
     @staticmethod
     def _convert_cost_and_usage_quantity_types(result):
+        """
+        cost와 usage_quantity 필드를 float 타입으로 변환하는 함수
+        
+        변환에 실패하면 False를 반환하고, 성공하면 True를 반환합니다.
+        
+        Args:
+            result (dict): 변환할 딕셔너리
+            
+        Returns:
+            bool: 변환 성공 시 True, 실패 시 False
+        """
         try:
             result["cost"] = float(result["cost"])
             result["usage_quantity"] = float(result.get("usage_quantity", 0))
@@ -251,6 +419,18 @@ class CostManager(BaseManager):
 
     @staticmethod
     def _exist_cost_and_usage_quantity(result):
+        """
+        cost 또는 usage_quantity 필드가 존재하는지 확인하는 함수
+        
+        cost나 usage_quantity 중 하나라도 0이 아닌 값이 있으면 True를 반환합니다.
+        둘 다 0이거나 없으면 False를 반환합니다.
+        
+        Args:
+            result (dict): 확인할 딕셔너리
+            
+        Returns:
+            bool: cost 또는 usage_quantity가 존재하면 True, 아니면 False
+        """
         if result["cost"] or result["cost"] == float(0):
             return True
         elif result["usage_quantity"] or result["usage_quantity"] == float(0):
@@ -263,11 +443,34 @@ class CostManager(BaseManager):
 
     @staticmethod
     def _check_required_fields(result):
+        """
+        필수 필드가 존재하는지 확인하는 함수
+        
+        _REQUIRED_FIELDS에 정의된 모든 필드가 딕셔너리에 존재하는지 확인합니다.
+        
+        Args:
+            result (dict): 확인할 딕셔너리
+            
+        Raises:
+            ERROR_REQUIRED_PARAMETER: 필수 필드가 없을 때
+        """
         for field in _REQUIRED_FIELDS:
             if field not in result:
                 raise ERROR_REQUIRED_PARAMETER(key=field)
 
     def _set_type_mapper(self, result):
+        """
+        type_mapper 설정에 따라 데이터 타입을 변환하는 함수
+        
+        현재는 additional_info의 "Account ID" 필드를 문자열로 변환하고
+        12자리로 패딩하는 기능만 구현되어 있습니다.
+        
+        Args:
+            result (dict): 변환할 딕셔너리
+            
+        Returns:
+            dict: 타입이 변환된 딕셔너리
+        """
         # Not Implemented
         if "additional_info" in self.type_mapper:
             if (

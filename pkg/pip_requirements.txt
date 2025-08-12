@@ -1,6 +1,8 @@
+spaceone-core
 schematics
 requests
 pandas
 numpy
 chardet
 google-cloud-storage
+google-auth
