@@ -1,7 +1,7 @@
 from spaceone.api.cost_analysis.plugin import job_pb2, job_pb2_grpc
 from spaceone.core.pygrpc import BaseAPI
-from cloudforet.cost_analysis.service.job_service import JobService
-from cloudforet.cost_analysis.info.job_info import TasksInfo
+from plugin.service.job_service import JobService
+from plugin.info.job_info import TasksInfo
 
 
 class Job(BaseAPI, job_pb2_grpc.JobServicer):

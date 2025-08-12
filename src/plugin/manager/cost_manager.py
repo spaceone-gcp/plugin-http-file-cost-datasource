@@ -2,9 +2,9 @@ import logging
 import time
 from dateutil.parser import parse
 from spaceone.core.manager import BaseManager
-from cloudforet.cost_analysis.error import *
-from cloudforet.cost_analysis.connector.http_file_connector import HTTPFileConnector
-from cloudforet.cost_analysis.connector.google_storage_collector import (
+from plugin.error import *
+from plugin.connector.http_file_connector import HTTPFileConnector
+from plugin.connector.google_storage_collector import (
     GoogleStorageConnector,
 )
 
@@ -37,12 +37,15 @@ class CostManager(BaseManager):
         if "type_mapper" in options:
             self.type_mapper = options["type_mapper"]
 
+        if task_options is None:
+            task_options = {}
+
         if "base_url" in task_options:
             base_url = task_options["base_url"]
             http_file_connector = self.locator.get_connector(HTTPFileConnector)
             http_file_connector.create_session(options, secret_data, schema)
             response_stream = http_file_connector.get_cost_data(base_url)
-        else:
+        elif "bucket_name" in task_options:
             # just for Google Cloud Storage
             bucket_name = task_options["bucket_name"]
             storage_connector = self.locator.get_connector(
@@ -50,9 +53,19 @@ class CostManager(BaseManager):
             )
             response_stream = storage_connector.get_cost_data(bucket_name)
             _LOGGER.debug(f"[get_data] get cost data from {bucket_name} bucket")
+        else:
+            # fallback to options.base_url if task_options is empty
+            if "base_url" in options:
+                base_url = options["base_url"]
+                http_file_connector = self.locator.get_connector(HTTPFileConnector)
+                http_file_connector.create_session(options, secret_data, schema)
+                response_stream = http_file_connector.get_cost_data(base_url)
+            else:
+                raise ValueError("Either task_options.base_url, task_options.bucket_name, or options.base_url must be provided")
 
         for results in response_stream:
-            yield self._make_cost_data(results)
+            costs_data = self._make_cost_data(results)
+            yield {"results": costs_data}
 
         _LOGGER.debug(
             f"[collector_collect] Finished Collecting Cost Data"
@@ -152,18 +165,47 @@ class CostManager(BaseManager):
             result["billed_date"] = billed_date
 
         else:
-            year = result["year"]
-            month = result["month"]
-            day = result.get("day", "01")
+            # Google Cloud Billing Export의 invoice.month 필드 처리 (평면화된 형태)
+            if "invoice.month" in result:
+                invoice_month = str(result["invoice.month"])
+                # invoice.month는 "YYYYMM" 형식 (예: "202508")
+                if len(invoice_month) == 6:
+                    year = invoice_month[:4]
+                    month = invoice_month[4:6]
+                    day = "01"  # 기본값으로 1일 사용
+                    billed_date = f"{year}-{month}-{day}"
+                    result["billed_date"] = billed_date
+                    return result
+            
+            # Google Cloud Billing Export의 invoice.month 필드 처리 (딕셔너리 형태)
+            if "invoice" in result and isinstance(result["invoice"], dict) and "month" in result["invoice"]:
+                invoice_month = result["invoice"]["month"]
+                # invoice.month는 "YYYYMM" 형식 (예: "202508")
+                if len(invoice_month) == 6:
+                    year = invoice_month[:4]
+                    month = invoice_month[4:6]
+                    day = "01"  # 기본값으로 1일 사용
+                    billed_date = f"{year}-{month}-{day}"
+                    result["billed_date"] = billed_date
+                    return result
+            
+            # 기존 year, month 필드 처리
+            if "year" in result and "month" in result:
+                year = result["year"]
+                month = result["month"]
+                day = result.get("day", "01")
 
-            if len(month) == 1:
-                month = f"0{month}"
-            if len(day) == 1:
-                day = f"0{day}"
+                if len(month) == 1:
+                    month = f"0{month}"
+                if len(day) == 1:
+                    day = f"0{day}"
 
-            billed_date = f"{year}-{month}-{day}"
-
-            result["billed_date"] = billed_date
+                billed_date = f"{year}-{month}-{day}"
+                result["billed_date"] = billed_date
+            else:
+                # billed_date, year/month, invoice.month 모두 없는 경우
+                _LOGGER.error(f"[_create_billed_date] No valid date field found: {result}")
+                raise ERROR_EMPTY_BILLED_DATE(result=result)
 
         return result
 
@@ -173,8 +215,12 @@ class CostManager(BaseManager):
             return True
         elif result.get("year") and result.get("month"):
             return False
+        elif "invoice.month" in result:
+            return False
+        elif "invoice" in result and isinstance(result["invoice"], dict) and "month" in result["invoice"]:
+            return False
         else:
-            _LOGGER.error(f"[_is_not_empty_billed_at] billed_at is empty: {result}")
+            _LOGGER.error(f"[_exist_billed_date] billed_date is empty: {result}")
             raise ERROR_EMPTY_BILLED_DATE(result=result)
 
     @staticmethod

@@ -2,11 +2,12 @@ import logging
 
 from spaceone.core.manager import BaseManager
 
-from cloudforet.cost_analysis.connector.google_storage_collector import (
+
+from plugin.connector.google_storage_collector import (
     GoogleStorageConnector,
 )
-from cloudforet.cost_analysis.model.data_source_model import PluginMetadata
-from cloudforet.cost_analysis.connector.http_file_connector import HTTPFileConnector
+from plugin.model.data_source_model import PluginMetadata
+from plugin.connector.http_file_connector import HTTPFileConnector
 
 _LOGGER = logging.getLogger(__name__)
 

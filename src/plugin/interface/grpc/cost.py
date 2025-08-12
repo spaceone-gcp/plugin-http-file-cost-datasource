@@ -1,7 +1,7 @@
 from spaceone.api.cost_analysis.plugin import cost_pb2, cost_pb2_grpc
 from spaceone.core.pygrpc import BaseAPI
-from cloudforet.cost_analysis.service.cost_service import CostService
-from cloudforet.cost_analysis.info.cost_info import CostsInfo
+from plugin.service.cost_service import CostService
+from plugin.info.cost_info import CostsInfo
 
 
 class Cost(BaseAPI, cost_pb2_grpc.CostServicer):
