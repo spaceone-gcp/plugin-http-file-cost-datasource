@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import chardet
 import requests
+import json
 from spaceone.core.connector import BaseConnector
 from spaceone.core.error import ERROR_UNKNOWN
 from typing import List
@@ -38,7 +39,16 @@ class HTTPFileConnector(BaseConnector):
     def get_cost_data(self, base_url):
         _LOGGER.debug(f"[get_cost_data] base url: {base_url}")
 
-        costs_data = self._get_csv(base_url)
+        # 파일 확장자나 URL을 기반으로 파일 형식 감지
+        is_json = self._is_json_file(base_url)
+        _LOGGER.debug(f"[get_cost_data] is_json_file result: {is_json}")
+        
+        if is_json:
+            _LOGGER.debug(f"[get_cost_data] Processing as JSON file")
+            costs_data = self._get_json(base_url)
+        else:
+            _LOGGER.debug(f"[get_cost_data] Processing as CSV file")
+            costs_data = self._get_csv(base_url)
 
         _LOGGER.debug(f"[get_cost_data] costs count: {len(costs_data)}")
 
@@ -166,6 +176,111 @@ class HTTPFileConnector(BaseConnector):
         except Exception as e:
             _LOGGER.error(f"[_get_csv] download error: {e}", exc_info=True)
             raise e
+
+    def _get_json(self, base_url: str) -> List[dict]:
+        """JSON 파일에서 비용 데이터를 읽어오는 메서드"""
+        try:
+            # 파일 다운로드
+            try:
+                response = requests.get(base_url, timeout=30)
+                response.raise_for_status()
+                _LOGGER.debug(f"[_get_json] Successfully downloaded file from {base_url}")
+            except requests.exceptions.RequestException as e:
+                _LOGGER.error(f"[_get_json] Failed to download file from {base_url}: {e}")
+                raise ERROR_FILE_DOWNLOAD_FAILED(file_path=base_url)
+            
+            # 응답 크기 확인
+            content_length = len(response.content)
+            _LOGGER.debug(f"[_get_json] Response content length: {content_length} bytes for {base_url}")
+            
+            # 파일이 비어있는지 확인
+            if content_length == 0:
+                _LOGGER.error(f"[_get_json] File is empty (content length 0): {base_url}")
+                raise ERROR_EMPTY_FILE(file_path=base_url)
+            
+            # 파일 내용을 문자열로 디코딩
+            try:
+                content = response.content.decode('utf-8', errors='ignore')
+            except UnicodeDecodeError as e:
+                _LOGGER.error(f"[_get_json] Failed to decode content: {e}")
+                raise ERROR_CSV_PARSING(error_message=f"Failed to decode file content")
+            
+            # JSON 파싱
+            try:
+                # JSON Lines 형식 (각 줄이 개별 JSON 객체)인지 확인
+                lines = content.strip().split('\n')
+                if len(lines) > 1:
+                    # JSON Lines 형식 처리
+                    json_data = []
+                    for line_num, line in enumerate(lines, 1):
+                        line = line.strip()
+                        if line:  # 빈 줄 건너뛰기
+                            try:
+                                json_obj = json.loads(line)
+                                json_data.append(json_obj)
+                            except json.JSONDecodeError as e:
+                                _LOGGER.warning(f"[_get_json] Failed to parse line {line_num}: {e}")
+                                continue
+                else:
+                    # 일반 JSON 형식 처리
+                    json_data = json.loads(content)
+                    # 배열이 아닌 단일 객체인 경우 배열로 변환
+                    if not isinstance(json_data, list):
+                        json_data = [json_data]
+                
+                _LOGGER.debug(f"[_get_json] Successfully parsed {len(json_data)} JSON objects from {base_url}")
+                
+                if not json_data:
+                    _LOGGER.error(f"[_get_json] No valid JSON data found: {base_url}")
+                    raise ERROR_NO_DATA_FOUND(file_path=base_url)
+                
+                # 첫 번째 객체의 키를 로깅
+                if json_data:
+                    _LOGGER.debug(f"[_get_json] Keys in first object: {list(json_data[0].keys())}")
+                
+                return json_data
+                
+            except json.JSONDecodeError as e:
+                _LOGGER.error(f"[_get_json] JSON parsing error for {base_url}: {e}")
+                raise ERROR_JSON_PARSING(error_message=str(e))
+                
+        except Exception as e:
+            _LOGGER.error(f"[_get_json] download error: {e}", exc_info=True)
+            raise e
+
+    def _is_json_file(self, base_url: str) -> bool:
+        """URL이나 파일 확장자를 기반으로 JSON 파일인지 확인하는 메서드"""
+        _LOGGER.debug(f"[_is_json_file] Checking if {base_url} is a JSON file")
+        
+        # URL에 .json 확장자가 있는지 확인
+        if base_url.lower().endswith('.json'):
+            _LOGGER.debug(f"[_is_json_file] Detected .json extension")
+            return True
+        
+        # Content-Type 헤더를 확인하기 위해 HEAD 요청 시도
+        try:
+            response = requests.head(base_url, timeout=10)
+            content_type = response.headers.get('content-type', '').lower()
+            _LOGGER.debug(f"[_is_json_file] Content-Type: {content_type}")
+            if 'application/json' in content_type or 'text/json' in content_type:
+                _LOGGER.debug(f"[_is_json_file] Detected JSON content type")
+                return True
+        except Exception as e:
+            _LOGGER.debug(f"[_is_json_file] HEAD request failed: {e}")
+        
+        # 파일의 첫 번째 문자를 확인하여 JSON인지 판단
+        try:
+            response = requests.get(base_url, timeout=10)
+            content = response.content.decode('utf-8', errors='ignore').strip()
+            _LOGGER.debug(f"[_is_json_file] First 100 chars: {repr(content[:100])}")
+            if content.startswith('{') or content.startswith('['):
+                _LOGGER.debug(f"[_is_json_file] Detected JSON structure")
+                return True
+        except Exception as e:
+            _LOGGER.debug(f"[_is_json_file] GET request failed: {e}")
+        
+        _LOGGER.debug(f"[_is_json_file] Not detected as JSON file")
+        return False
 
     @staticmethod
     def _search_csv_format(base_url: str) -> str:

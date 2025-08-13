@@ -37,5 +37,9 @@ class ERROR_INVALID_FILE_FORMAT(ERROR_UNKNOWN):
     _message = "Invalid file format: {file_path}. Expected CSV or JSON format."
 
 
+class ERROR_JSON_PARSING(ERROR_UNKNOWN):
+    _message = "JSON parsing error: {error_message}"
+
+
 class ERROR_DIRECTORY_BLOB(ERROR_UNKNOWN):
     _message = "Attempted to download a directory-like blob: {file_path}. Please ensure you are targeting actual files, not directories."
