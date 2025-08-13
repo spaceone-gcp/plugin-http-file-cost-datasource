@@ -1,6 +1,8 @@
 import logging
 import os
 import tempfile
+import gzip
+import io
 from typing import List, Dict, Generator, Any
 
 import google.oauth2.service_account
@@ -27,7 +29,7 @@ _MIN_FILE_SIZE = 50  # 최소 파일 크기 (바이트)
 _MAX_FILENAME_LENGTH = 100  # 최대 파일명 길이
 _MAX_FINAL_FILENAME_LENGTH = 150  # 최종 파일명 최대 길이
 _UNDERSCORE_RATIO_THRESHOLD = 0.3  # 언더스코어 비율 임계값
-_SUPPORTED_EXTENSIONS = ['.csv', '.json', '.parquet']  # 지원되는 파일 확장자
+_SUPPORTED_EXTENSIONS = ['.csv', '.json', '.json.gz', '.parquet', '.parquet.gz', '.parquet.snappy', '.parquet.zst', '.parquet.sz', '.parquet.zstd']  # 지원되는 파일 확장자
 _CSV_SEPARATORS = [',', ';', '\t', '|']  # CSV 구분자 목록
 _LOGGER = logging.getLogger("spaceone")
 class GoogleStorageConnector(BaseConnector):
@@ -262,19 +264,20 @@ class GoogleStorageConnector(BaseConnector):
             # 1. 파일 확장자 추출 (소문자로 변환)
             file_extension = os.path.splitext(cost_file)[1].lower()
 
-            # 2. Parquet 파일인 경우
-            if file_extension == '.parquet':
+            # 2. Parquet 파일인 경우 (압축된 Parquet 파일 포함)
+            parquet_extensions = ['.parquet', '.parquet.gz', '.parquet.snappy', '.parquet.zst', '.parquet.sz', '.parquet.zstd']
+            if file_extension == '.parquet' or any(cost_file.lower().endswith(ext) for ext in parquet_extensions):
                 # Parquet 파서 호출
                 return GoogleStorageConnector._read_parquet_file(cost_file)
 
-            # 3. JSON 파일인 경우
-            elif file_extension == '.json':
+            # 3. JSON 파일인 경우 (.json.gz 포함)
+            elif file_extension == '.json' or file_extension == '.json.gz':
                 # JSON 파서 호출
                 return GoogleStorageConnector._read_json_file(cost_file)
 
             # 4. 그 외(주로 CSV)인 경우
             else:
-                # 4-1. 파일을 열어서 첫 번째 줄을 읽음
+                # 4-1. 파일을 열어서 첫 번째 줄을 읽음 (명시적 인코딩 지정으로 None 인코딩 문제 방지)
                 with open(cost_file, 'r', encoding='utf-8') as f:
                     first_line = f.readline().strip()
 
@@ -314,7 +317,7 @@ class GoogleStorageConnector(BaseConnector):
             ERROR_CSV_PARSING: CSV 파싱 오류
         """
         try:
-            # 1. 파일을 열어서 전체 내용을 읽고 앞뒤 공백 제거
+            # 1. 파일을 열어서 전체 내용을 읽고 앞뒤 공백 제거 (명시적 인코딩 지정으로 None 인코딩 문제 방지)
             with open(csv_file, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
 
@@ -347,6 +350,7 @@ class GoogleStorageConnector(BaseConnector):
                     break
 
             # 7. pandas를 사용하여 CSV 파일을 읽음
+            # 인코딩을 명시적으로 지정하여 None 인코딩 문제 방지
             df = pd.read_csv(
                 csv_file,
                 encoding="utf-8-sig",
@@ -399,25 +403,47 @@ class GoogleStorageConnector(BaseConnector):
         try:
             import json  # 1. json 모듈 임포트
 
-            # 2. 파일을 utf-8로 오픈
-            with open(json_file, 'r', encoding='utf-8') as f:
-                costs_data = []  # 3. 결과를 저장할 리스트 생성
+            # 2. 파일을 utf-8로 오픈 (명시적 인코딩 지정으로 None 인코딩 문제 방지)
+            # .json.gz 파일인 경우 압축 해제하여 처리
+            if json_file.lower().endswith('.json.gz'):
+                _LOGGER.debug(f"[_read_json_file] Processing gzipped JSON file: {json_file}")
+                with gzip.open(json_file, 'rt', encoding='utf-8') as f:
+                    costs_data = []  # 3. 결과를 저장할 리스트 생성
 
-                # 4. 파일의 각 라인을 순회
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()  # 5. 양쪽 공백 제거
-                    if line:  # 6. 빈 라인 건너뛰기
-                        try:
-                            record = json.loads(line)  # 7. JSON 파싱 시도
-                            costs_data.append(record)  # 8. 파싱 성공 시 리스트에 추가
-                        except json.JSONDecodeError as e:
-                            # 9. 파싱 실패 시 경고 로그 남기고 계속 진행
-                            _LOGGER.warning(f"[_read_json_file] Failed to parse JSON at line {line_num}: {e}")
-                            continue
+                    # 4. 파일의 각 라인을 순회
+                    for line_num, line in enumerate(f, 1):
+                        line = line.strip()  # 5. 양쪽 공백 제거
+                        if line:  # 6. 빈 라인 건너뛰기
+                            try:
+                                record = json.loads(line)  # 7. JSON 파싱 시도
+                                costs_data.append(record)  # 8. 파싱 성공 시 리스트에 추가
+                            except json.JSONDecodeError as e:
+                                # 9. 파싱 실패 시 경고 로그 남기고 계속 진행
+                                _LOGGER.warning(f"[_read_json_file] Failed to parse JSON at line {line_num}: {e}")
+                                continue
 
-                # 10. 성공적으로 파싱된 레코드 수 로그 출력
-                _LOGGER.info(f"[_read_json_file] Successfully parsed {len(costs_data)} records from {json_file}")
-                return costs_data  # 11. 결과 반환
+                    # 10. 성공적으로 파싱된 레코드 수 로그 출력
+                    _LOGGER.info(f"[_read_json_file] Successfully parsed {len(costs_data)} records from {json_file}")
+                    return costs_data  # 11. 결과 반환
+            else:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    costs_data = []  # 3. 결과를 저장할 리스트 생성
+
+                    # 4. 파일의 각 라인을 순회
+                    for line_num, line in enumerate(f, 1):
+                        line = line.strip()  # 5. 양쪽 공백 제거
+                        if line:  # 6. 빈 라인 건너뛰기
+                            try:
+                                record = json.loads(line)  # 7. JSON 파싱 시도
+                                costs_data.append(record)  # 8. 파싱 성공 시 리스트에 추가
+                            except json.JSONDecodeError as e:
+                                # 9. 파싱 실패 시 경고 로그 남기고 계속 진행
+                                _LOGGER.warning(f"[_read_json_file] Failed to parse JSON at line {line_num}: {e}")
+                                continue
+
+                    # 10. 성공적으로 파싱된 레코드 수 로그 출력
+                    _LOGGER.info(f"[_read_json_file] Successfully parsed {len(costs_data)} records from {json_file}")
+                    return costs_data  # 11. 결과 반환
 
         except Exception as e:
             # 12. 예외 발생 시 에러 로그 출력 및 재전파
@@ -430,6 +456,7 @@ class GoogleStorageConnector(BaseConnector):
         Parquet 파일을 읽어서 비용 데이터를 반환하는 함수
 
         Google Cloud Billing Export에서 생성되는 Parquet 형식을 지원합니다.
+        압축된 Parquet 파일(.parquet.gz, .parquet.snappy, .parquet.zst, .parquet.sz, .parquet.zstd)도 지원합니다.
         pyarrow 또는 fastparquet 라이브러리를 사용하여 Parquet 파일을 파싱합니다.
 
         Args:
@@ -443,38 +470,45 @@ class GoogleStorageConnector(BaseConnector):
         """
         try:
             df = None  # 1. DataFrame 초기화
+            file_extension = os.path.splitext(parquet_file)[1].lower()
 
-            # 2. pyarrow 엔진으로 읽기 시도
+            # 2. 압축된 Parquet 파일인지 확인
+            is_compressed = file_extension in ['.parquet.gz', '.parquet.snappy', '.parquet.zst', '.parquet.sz', '.parquet.zstd']
+            
+            if is_compressed:
+                _LOGGER.debug(f"[_read_parquet_file] Processing compressed Parquet file: {parquet_file} (extension: {file_extension})")
+
+            # 3. pyarrow 엔진으로 읽기 시도
             try:
                 df = pd.read_parquet(parquet_file, engine='pyarrow')
                 _LOGGER.debug(f"[_read_parquet_file] Using pyarrow engine for {parquet_file}")
             except ImportError:
-                # 3. pyarrow가 없으면 fastparquet 엔진으로 재시도
+                # 4. pyarrow가 없으면 fastparquet 엔진으로 재시도
                 try:
                     df = pd.read_parquet(parquet_file, engine='fastparquet')
                     _LOGGER.debug(f"[_read_parquet_file] Using fastparquet engine for {parquet_file}")
                 except ImportError:
-                    # 4. 두 엔진 모두 없으면 에러 발생
+                    # 5. 두 엔진 모두 없으면 에러 발생
                     error_msg = "pyarrow or fastparquet library is required to read Parquet files."
                     _LOGGER.error(f"[_read_parquet_file] {error_msg}")
                     raise ImportError(error_msg)
 
-            # 5. DataFrame이 정상적으로 읽혔는지 확인
+            # 6. DataFrame이 정상적으로 읽혔는지 확인
             if df is None:
                 raise Exception("Failed to read parquet file with any available engine")
 
-            # 6. DataFrame 검증 함수 호출
+            # 7. DataFrame 검증 함수 호출
             GoogleStorageConnector._validate_dataframe(df, parquet_file)
 
-            # 7. NaN 값을 None으로 변환
+            # 8. NaN 값을 None으로 변환
             df = df.replace({np.nan: None})
-            costs_data = df.to_dict("records")  # 8. DataFrame을 dict 리스트로 변환
+            costs_data = df.to_dict("records")  # 9. DataFrame을 dict 리스트로 변환
 
-            # 9. 성공적으로 파싱된 레코드 수 로그 출력
+            # 10. 성공적으로 파싱된 레코드 수 로그 출력
             _LOGGER.info(f"[_read_parquet_file] Successfully parsed {len(costs_data)} records from {parquet_file}")
-            return costs_data  # 10. 결과 반환
+            return costs_data  # 11. 결과 반환
 
         except Exception as e:
-            # 11. 예외 발생 시 에러 로그 출력 및 재전파
+            # 12. 예외 발생 시 에러 로그 출력 및 재전파
             _LOGGER.error(f"[_read_parquet_file] Parquet read error: {e}", exc_info=True)
             raise e

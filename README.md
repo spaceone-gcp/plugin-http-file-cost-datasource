@@ -45,6 +45,12 @@ you can check the actual usage in [4) How to use](#4-how-to-use).
 * **Dependencies**: Requires either pyarrow or fastparquet to be installed
 * **Installation**: `pip install pyarrow fastparquet` (both are included in requirements.txt)
 * **Performance**: Parquet files offer better compression and faster reading for large datasets
+* **Compressed Formats**: Supports various compressed Parquet formats:
+  - `.parquet.gz` - Gzip compressed Parquet files
+  - `.parquet.snappy` - Snappy compressed Parquet files
+  - `.parquet.zst` - Zstandard compressed Parquet files
+  - `.parquet.sz` - Snappy compressed Parquet files (alternative extension)
+  - `.parquet.zstd` - Zstandard compressed Parquet files (alternative extension)
 
 ### Error Handling
 
@@ -84,6 +90,12 @@ The plugin has been enhanced with better file handling capabilities:
   - More specific error messages for different failure scenarios
   - Detailed logging for debugging file processing issues
   - Clear distinction between different types of file errors
+
+* **Compressed Parquet Support**:
+  - Added support for compressed Parquet file formats
+  - Automatically detects and processes `.parquet.gz`, `.parquet.snappy`, `.parquet.zst`, `.parquet.sz`, `.parquet.zstd` files
+  - Maintains backward compatibility with uncompressed `.parquet` files
+  - Works with both Google Cloud Storage and HTTP file connectors
 
 <br>
 
