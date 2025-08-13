@@ -1,13 +1,13 @@
 # plugin-http-file-cost-datasource
 
-* Plugin for collecting cost data from **CSV file**
+* Plugin for collecting cost data from **CSV, JSON, and Parquet files**
 
 ---
 
 ## 1) Overview
-ㅡ
-This plugin is a plugin that collects cost data from a CSV file.  
-The CSV file must be in the format specified in the [2) CSV format](#2-csv-format) section.  
+
+This plugin is a plugin that collects cost data from CSV, JSON, and Parquet files.  
+The files must be in the format specified in the [2) File format](#2-file-format) section.  
 
 The CSV file must be located on the web server,  
 and the URL must be specified in the [3) options of the plugin](#3-options-of-plugin).  
@@ -15,7 +15,7 @@ and the URL must be specified in the [3) options of the plugin](#3-options-of-pl
 If you have completed understanding the steps 2) and 3),  
 you can check the actual usage in [4) How to use](#4-how-to-use).
 
-## 2) CSV format
+## 2) File format
 
 ![img.png](examples/img.png)
 
@@ -27,16 +27,28 @@ you can check the actual usage in [4) How to use](#4-how-to-use).
   * If there is no `billed_date` field and there are `year` and `month`, `day` is applied as 1 day.
   * Does not work except for the above cases.
 
-### Supported CSV Formats
+### Supported File Formats
 
+#### CSV Files
 * **Delimiters**: The plugin automatically detects common delimiters including comma (,), semicolon (;), tab (\t), and pipe (|)
 * **Encoding**: UTF-8, UTF-8-BOM, and other encodings are automatically detected
 * **Headers**: CSV files must have a header row with column names
 * **Data Requirements**: Files must contain at least one data row (not just headers)
 
+#### JSON Files
+* **Format**: Supports JSON Lines (JSONL) format where each line is a separate JSON object
+* **Encoding**: UTF-8 encoding is supported
+* **Structure**: Each JSON object should contain the required cost fields
+
+#### Parquet Files
+* **Engines**: Supports both pyarrow and fastparquet engines
+* **Dependencies**: Requires either pyarrow or fastparquet to be installed
+* **Installation**: `pip install pyarrow fastparquet` (both are included in requirements.txt)
+* **Performance**: Parquet files offer better compression and faster reading for large datasets
+
 ### Error Handling
 
-The plugin includes robust error handling for common CSV parsing issues:
+The plugin includes robust error handling for common file parsing issues:
 
 * **Empty Files**: Returns clear error message when files contain no data
 * **Missing Headers**: Detects and reports files without proper column headers
@@ -46,6 +58,8 @@ The plugin includes robust error handling for common CSV parsing issues:
 * **File Download Issues**: Validates file downloads and reports failures
 * **Temporary File Management**: Automatically cleans up temporary files after processing
 * **Filename Sanitization**: Handles special characters and long filenames safely
+* **Parquet Dependencies**: Provides clear installation instructions when pyarrow/fastparquet are missing
+* **Engine Fallback**: Automatically tries alternative engines if one fails
 
 ### Recent Improvements
 

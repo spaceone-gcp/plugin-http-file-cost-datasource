@@ -36,7 +36,11 @@ setup(
         "requests",
         "pandas",
         "numpy",
+        "chardet",
         "google-cloud-storage",
+        "google-auth",
+        "pyarrow",
+        "fastparquet",
     ],
     zip_safe=False,
 )

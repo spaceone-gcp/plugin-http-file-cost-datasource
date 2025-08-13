@@ -1,8 +1,9 @@
 import logging
 import time
+from decimal import Decimal, InvalidOperation
 from dateutil.parser import parse
 from spaceone.core.manager import BaseManager
-from plugin.error import *
+from plugin.error.cost import ERROR_EMPTY_BILLED_DATE, ERROR_REQUIRED_PARAMETER
 from plugin.connector.http_file_connector import HTTPFileConnector
 from plugin.connector.google_storage_collector import (
     GoogleStorageConnector,
@@ -140,21 +141,21 @@ class CostManager(BaseManager):
         costs_data = []
         # 1. results 리스트 순회
         for result in results:
-            # 2. 키에 strip 적용
+            # 2. 딕셔너리의 모든 키에 strip() 적용 (공백 제거)
             result = self._apply_strip_to_dict_keys(result)
             
-            # 3. 값에 strip 적용
+            # 3. 딕셔너리의 모든 값에 strip() 적용 (공백 제거)
             result = self._apply_strip_to_dict_values(result)
 
-            # 4. field_mapper 적용
+            # 4. field_mapper가 있으면 필드명 매핑 적용
             if self.field_mapper:
                 result = self._change_result_by_field_mapper(result)
 
-            # 5. default_vars 적용
+            # 5. default_vars가 있으면 기본값 적용
             if self.default_vars:
                 self._set_default_vars(result)
 
-            # 6. type_mapper 적용
+            # 6. type_mapper가 있으면 타입 변환 적용
             if self.type_mapper:
                 self._set_type_mapper(result)
 
@@ -170,18 +171,60 @@ class CostManager(BaseManager):
 
             try:
                 # 10. SpaceONE 비용 데이터 포맷에 맞게 딕셔너리 생성
+                # (1) cost 값 가져오기 (없으면 0으로 처리)
+                cost_value = result.get("cost") or Decimal('0')
+                
+                # (2) credits.amount를 Decimal로 안전하게 변환
+                credits_amount_raw = result.get("credits.amount", 0)
+                if isinstance(credits_amount_raw, (int, float)):
+                    credits_amount = Decimal(str(credits_amount_raw))
+                elif isinstance(credits_amount_raw, str):
+                    credits_amount = Decimal(credits_amount_raw.strip())
+                else:
+                    credits_amount = Decimal('0')
+                
+                # (3) cost + credits.amount 합산
+                total_cost_decimal = cost_value + credits_amount
+                
+                # (4) 과학적 표기법 방지 및 불필요한 0 제거
+                total_cost_str = format(total_cost_decimal, 'f')
+                total_cost_str = total_cost_str.rstrip('0').rstrip('.')
+                # (5) 매우 작은 값은 문자열로 유지, 아니면 float 변환
+                if total_cost_str and float(total_cost_str) < 0.0001:
+                    total_cost = total_cost_str
+                else:
+                    total_cost = float(total_cost_str) if total_cost_str else 0.0
+                
+                # (6) usage.amount_in_pricing_units를 Decimal로 안전하게 변환
+                usage_quantity_raw = result.get("usage.amount_in_pricing_units", 0)
+                if isinstance(usage_quantity_raw, (int, float)):
+                    usage_quantity_decimal = Decimal(str(usage_quantity_raw))
+                elif isinstance(usage_quantity_raw, str):
+                    usage_quantity_decimal = Decimal(usage_quantity_raw.strip())
+                else:
+                    usage_quantity_decimal = Decimal('0')
+                
+                # (7) usage_quantity도 과학적 표기법 방지 및 불필요한 0 제거
+                usage_quantity_str = format(usage_quantity_decimal, 'f')
+                usage_quantity_str = usage_quantity_str.rstrip('0').rstrip('.')
+                if usage_quantity_str and float(usage_quantity_str) < 0.0001:
+                    usage_quantity = usage_quantity_str
+                else:
+                    usage_quantity = float(usage_quantity_str) if usage_quantity_str else 0.0
+                
+                # (8) 최종 데이터 딕셔너리 생성 (SpaceONE 포맷)
                 data = {
-                    "cost": result["cost"],  # 비용 금액 (필수)
-                    "usage_quantity": result.get("usage_quantity", 0),  # 사용량 (기본값 0)
-                    "usage_type": result.get("usage_type"),  # 사용 유형 (선택)
-                    "usage_unit": result.get("usage_unit"),  # 사용 단위 (선택)
-                    "provider": result.get("provider"),  # 클라우드 제공자 (선택)
-                    "region_code": result.get("region_code"),  # 리전 코드 (선택)
-                    "product": result.get("product"),  # 제품명 (선택)
-                    "resource": result.get("resource", ""),  # 리소스명 (기본값 빈 문자열)
-                    "billed_date": result["billed_date"],  # 청구 날짜 (필수)
-                    "additional_info": result.get("additional_info", {}),  # 추가 정보 (기본값 빈 dict)
-                    "tags": result.get("tags", {}),  # 태그 정보 (기본값 빈 dict)
+                    "cost": total_cost,  # 최종 비용(Decimal을 float로 변환하여 출력)
+                    "usage_quantity": usage_quantity,  # 사용량(Decimal을 float로 변환하여 출력)
+                    "usage_type": result.get("sku.description") or "",  # SKU 설명(사용 유형, 없으면 빈 문자열)
+                    "usage_unit": result.get("usage.pricing_unit") or "",  # 사용 단위(없으면 빈 문자열)
+                    "provider": result.get("provider") or "",  # 클라우드 제공자(없으면 빈 문자열)
+                    "region_code": result.get("region_code") or "",  # 리전 코드(없으면 빈 문자열)
+                    "product": result.get("service.description") or "",  # 서비스/제품명(없으면 빈 문자열)
+                    "resource": result.get("resource", ""),  # 리소스명(없으면 빈 문자열)
+                    "billed_date": self._format_date_only(result.get("usage_start_time", "")),  # 청구 날짜(필수, usage_start_time 기준)
+                    "additional_info": result.get("additional_info") or {},  # 추가 정보(없으면 빈 dict)
+                    "tags": result.get("tags.value") or {},  # 태그 정보(없으면 빈 dict)
                 }
 
             except Exception as e:
@@ -288,6 +331,13 @@ class CostManager(BaseManager):
 
             result["billed_date"] = billed_date
 
+        # usage_start_time이 있는 경우 처리
+        elif "usage_start_time" in result:
+            usage_start_time = result["usage_start_time"]
+            billed_date = self._format_date_only(usage_start_time)
+            result["billed_date"] = billed_date
+            return result
+
         else:
             # Google Cloud Billing Export의 invoice.month 필드 처리 (평면화된 형태)
             if "invoice.month" in result:
@@ -338,20 +388,22 @@ class CostManager(BaseManager):
         """
         billed_date 필드가 존재하는지 확인하는 함수
         
-        billed_date, year/month, invoice.month 중 하나라도 있으면 True를 반환합니다.
+        billed_date, usage_start_time, year/month, invoice.month 중 하나라도 있으면 True를 반환합니다.
         모든 날짜 필드가 없으면 예외를 발생시킵니다.
         
         Args:
             result (dict): 확인할 딕셔너리
             
         Returns:
-            bool: billed_date가 존재하면 True, year/month나 invoice.month가 있으면 False
+            bool: billed_date가 존재하면 True, 다른 날짜 필드가 있으면 False
             
         Raises:
             ERROR_EMPTY_BILLED_DATE: 모든 날짜 필드가 없을 때
         """
         if result.get("billed_date"):
             return True
+        elif result.get("usage_start_time"):
+            return False
         elif result.get("year") and result.get("month"):
             return False
         elif "invoice.month" in result:
@@ -383,6 +435,30 @@ class CostManager(BaseManager):
             _LOGGER.error(f"[_apply_parse_date] parse date error: {e}", exc_info=True)
             raise e
 
+    @staticmethod
+    def _format_date_only(date_str):
+        """
+        날짜 문자열에서 시간 부분을 제거하고 YYYY-MM-DD 형태로 변환하는 함수
+        
+        Args:
+            date_str (str): 변환할 날짜 문자열 (예: "2025-07-10 01:00:00 UTC")
+            
+        Returns:
+            str: YYYY-MM-DD 형태의 날짜 문자열 (예: "2025-07-10")
+        """
+        if not date_str or not isinstance(date_str, str):
+            return ""
+        
+        try:
+            # 날짜 파싱 시도
+            parsed_date = parse(date_str)
+            return parsed_date.strftime("%Y-%m-%d")
+        except Exception:
+            # 파싱 실패 시 문자열에서 날짜 부분만 추출
+            if len(date_str) >= 10 and date_str[4] == '-' and date_str[7] == '-':
+                return date_str[:10]  # "YYYY-MM-DD" 부분만 추출
+            return date_str  # 변환할 수 없으면 원본 반환
+
     def _set_default_vars(self, result):
         """
         default_vars 설정에 따라 딕셔너리에 기본값을 설정하는 함수
@@ -396,8 +472,9 @@ class CostManager(BaseManager):
     @staticmethod
     def _convert_cost_and_usage_quantity_types(result):
         """
-        cost와 usage_quantity 필드를 float 타입으로 변환하는 함수
+        cost와 usage_quantity 필드를 Decimal 타입으로 변환하는 함수
         
+        정밀한 소수점 계산을 위해 Decimal 타입을 사용합니다.
         변환에 실패하면 False를 반환하고, 성공하면 True를 반환합니다.
         
         Args:
@@ -407,9 +484,21 @@ class CostManager(BaseManager):
             bool: 변환 성공 시 True, 실패 시 False
         """
         try:
-            result["cost"] = float(result["cost"])
-            result["usage_quantity"] = float(result.get("usage_quantity", 0))
-        except Exception as e:
+            # cost 필드를 Decimal로 변환 (정밀한 소수점 계산)
+            cost_value = result["cost"]
+            if isinstance(cost_value, str):
+                # 문자열인 경우 공백 제거 후 변환
+                cost_value = cost_value.strip()
+            result["cost"] = Decimal(str(cost_value))
+            
+            # usage_quantity 필드를 Decimal로 변환
+            usage_value = result.get("usage_quantity", 0)
+            if isinstance(usage_value, str):
+                # 문자열인 경우 공백 제거 후 변환
+                usage_value = usage_value.strip()
+            result["usage_quantity"] = Decimal(str(usage_value))
+            
+        except (InvalidOperation, ValueError, TypeError) as e:
             _LOGGER.error(
                 f"[_convert_cost_and_usage_quantity_types] convert cost and usage quantity types error: {e} (data={result})",
                 exc_info=True,
@@ -431,9 +520,9 @@ class CostManager(BaseManager):
         Returns:
             bool: cost 또는 usage_quantity가 존재하면 True, 아니면 False
         """
-        if result["cost"] or result["cost"] == float(0):
+        if result["cost"] or result["cost"] == Decimal('0'):
             return True
-        elif result["usage_quantity"] or result["usage_quantity"] == float(0):
+        elif result["usage_quantity"] or result["usage_quantity"] == Decimal('0'):
             return True
         else:
             _LOGGER.error(

@@ -95,10 +95,10 @@ def job_get_tasks(params: dict) -> dict:
 @app.route("Cost.get_data")
 def cost_get_data(params: dict) -> Generator[dict, None, None]:
     """외부 비용 데이터를 수집하는 메인 함수
-    
+
     이 함수는 HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집하여
     SpaceONE의 비용 분석 시스템에서 사용할 수 있는 형태로 변환합니다.
-    
+
     데이터 소스는 task_options에 따라 결정됩니다:
     - task_options.base_url이 있으면 HTTP 파일에서 데이터 수집
     - task_options.bucket_name이 있으면 Google Cloud Storage에서 데이터 수집
@@ -130,37 +130,37 @@ def cost_get_data(params: dict) -> Generator[dict, None, None]:
             'data': 'dict',            # 원본 데이터 (선택)
             'billed_date': 'str'       # 청구 날짜 (필수)
         }
-        
+
     Raises:
         ValueError: PEM 형식이 올바르지 않을 때
         Exception: 데이터 수집 중 오류가 발생할 때
     """
 
-    # 필수 파라미터 추출
+    # 1. 필수 파라미터 추출
     options = params["options"]  # 플러그인 옵션 정보 추출
     secret_data = params["secret_data"]  # 인증 정보 추출
-    
-    # PEM 키 정리 (다양한 줄바꿈 문자 처리)
+
+    # 2. PEM 키 정리 (다양한 줄바꿈 문자 처리)
     # Google Cloud 인증을 위해 PEM 포맷의 private_key를 정리
     secret_data['private_key'] = _clean_pem(secret_data['private_key'])
 
-    # 선택적 파라미터 추출 (기본값 설정)
+    # 3. 선택적 파라미터 추출 (기본값 설정)
     # task_options가 없으면 빈 dict로 대체
     task_options = params.get("task_options", {})
     schema = params.get("schema")  # 스키마 정보 추출 (선택)
 
     try:
-        # CostManager를 통해 데이터 수집 시작
+        # 4. CostManager를 통해 데이터 수집 시작
         # get_data는 Generator를 반환하므로 메모리 효율적으로 대용량 데이터 처리 가능
         result_generator = CostManager().get_data(options, secret_data, schema, task_options)
-        
-        # 수집된 데이터를 하나씩 yield하여 스트리밍 방식으로 반환
+
+        # 5. 수집된 데이터를 하나씩 yield하여 스트리밍 방식으로 반환
         for result in result_generator:
-            # 각 result는 {"results": [비용 데이터 리스트]} 형태
+            # 5-1. 각 result는 {"results": [비용 데이터 리스트]} 형태
             yield result
-            
+
     except Exception as e:
-        # 오류 발생 시 로깅 및 예외 재발생
+        # 6. 오류 발생 시 로깅 및 예외 재발생
         _LOGGER = logging.getLogger("spaceone")
         _LOGGER.error(f"[cost_get_data] Error in get_data: {e}", exc_info=True)
         raise e
