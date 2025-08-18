@@ -2,21 +2,28 @@
 Cost Analysis Plugin의 gRPC 인터페이스 모듈
 
 이 모듈은 SpaceONE Cost Analysis 플러그인의 gRPC 서비스를 정의합니다.
-HTTP 파일에서 비용 데이터를 수집하고 처리하는 기능을 제공합니다.
+HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집하고 처리하는 기능을 제공합니다.
+주요 기능:
+- 비용 데이터 수집 (get_data)
+- 연결된 계정 정보 조회 (get_linked_accounts)
 """
 
 from spaceone.api.cost_analysis.plugin import cost_pb2, cost_pb2_grpc
 from spaceone.core.pygrpc import BaseAPI
 from plugin.service.cost_service import CostService
-from plugin.info.cost_info import CostsInfo
+from plugin.info.cost_info import CostsInfo, LinkedAccountsInfo
 
 
 class Cost(BaseAPI, cost_pb2_grpc.CostServicer):
     """
     Cost Analysis 플러그인의 gRPC 서비스 클래스
     
-    HTTP 파일에서 비용 데이터를 수집하고 처리하는 gRPC 엔드포인트를 제공합니다.
+    HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집하고 처리하는 gRPC 엔드포인트를 제공합니다.
     SpaceONE의 BaseAPI를 상속받아 표준화된 API 구조를 따릅니다.
+    
+    주요 메서드:
+    - get_data: 비용 데이터 수집 및 스트리밍
+    - get_linked_accounts: 연결된 계정 정보 조회
     """
     
     # gRPC 프로토콜 버퍼 정의
@@ -45,3 +52,29 @@ class Cost(BaseAPI, cost_pb2_grpc.CostServicer):
             # 각 비용 데이터를 CostsInfo 객체로 변환하여 응답 스트림 생성
             for costs_data in response_stream:
                 yield self.locator.get_info(CostsInfo, costs_data)
+
+    def get_linked_accounts(self, request, context):
+        """
+        연결된 계정(Linked Accounts) 정보를 조회하는 gRPC 메서드
+        
+        HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집할 때
+        연결된 계정들의 목록을 반환합니다. 이 정보는 SpaceONE에서
+        계정별 비용 분석을 위해 사용됩니다.
+        
+        Args:
+            request: gRPC 요청 객체 (계정 조회 설정 정보 포함)
+            context: gRPC 컨텍스트 객체
+            
+        Returns:
+            LinkedAccountsInfo: 연결된 계정 정보 객체
+        """
+        # gRPC 요청을 파싱하여 파라미터와 메타데이터 추출
+        params, metadata = self.parse_request(request, context)
+
+        # CostService를 사용하여 연결된 계정 정보 조회
+        with self.locator.get_service(CostService, metadata) as cost_service:
+            # 연결된 계정 정보 조회
+            linked_accounts_data = cost_service.get_linked_accounts(params)
+            
+            # LinkedAccountsInfo 객체로 변환하여 응답
+            return self.locator.get_info(LinkedAccountsInfo, linked_accounts_data)

@@ -1,6 +1,8 @@
 # plugin-http-file-cost-datasource
 
 * Plugin for collecting cost data from **CSV, JSON, and Parquet files**
+* Plugin for collecting cost data from **HTTP files and Google Cloud Storage**
+* Plugin for retrieving **linked accounts information**
 
 ---
 
@@ -8,6 +10,11 @@
 
 This plugin is a plugin that collects cost data from CSV, JSON, and Parquet files.  
 The files must be in the format specified in the [2) File format](#2-file-format) section.  
+
+The plugin supports multiple data sources:
+- **HTTP Files**: CSV, JSON, and Parquet files located on web servers
+- **Google Cloud Storage**: Files stored in Google Cloud Storage buckets
+- **Linked Accounts**: Retrieval of connected account information for cost analysis
 
 The CSV file must be located on the web server,  
 and the URL must be specified in the [3) options of the plugin](#3-options-of-plugin).  
@@ -366,3 +373,36 @@ $ spacectl exec sync cost-analysis.DataSource -p data_source_id=<data_source_id>
    - Check for special characters in file names
    - Verify temp directory permissions
    - Look for path length limitations
+
+## 6) Linked Accounts Feature
+
+### Overview
+The plugin provides a `get_linked_accounts` feature that retrieves information about connected accounts for cost analysis purposes. This feature is essential for multi-account environments where costs need to be analyzed across different accounts.
+
+### Functionality
+- **Account Discovery**: Automatically discovers connected accounts from the data source
+- **Account Information**: Retrieves account ID and name for each connected account
+- **Multi-Source Support**: Works with both HTTP files and Google Cloud Storage
+- **SpaceONE Integration**: Provides account information in SpaceONE-compatible format
+
+### Usage
+The `get_linked_accounts` function is called automatically by SpaceONE when:
+- Setting up cost analysis data sources
+- Configuring account-based cost reporting
+- Managing multi-account cost visibility
+
+### Implementation Status
+**Current Status**: Basic structure implemented with placeholder functionality
+- ✅ Function signature and gRPC interface defined
+- ✅ Service layer implementation completed
+- ✅ Protobuf message types defined
+- ⚠️ Data source-specific account extraction logic needs implementation
+- ⚠️ HTTP file account parsing logic needs implementation
+- ⚠️ Google Cloud Storage account extraction logic needs implementation
+
+### Future Enhancements
+- **HTTP File Account Extraction**: Parse account information from CSV/JSON headers or data
+- **Google Cloud Storage Account Discovery**: Extract account information from bucket metadata
+- **Account Validation**: Validate account information against cloud provider APIs
+- **Caching**: Implement account information caching for performance
+- **Error Handling**: Enhanced error handling for account discovery failures

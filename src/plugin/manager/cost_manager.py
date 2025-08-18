@@ -9,10 +9,10 @@ from plugin.connector.google_storage_collector import (
     GoogleStorageConnector,
 )
 
+# 로거 설정 
 _LOGGER = logging.getLogger("spaceone")
-
+# 필수 필드 목록    
 _REQUIRED_FIELDS = ["cost", "currency", "billed_date"]
-
 
 class CostManager(BaseManager):
     """
@@ -58,18 +58,16 @@ class CostManager(BaseManager):
         # 1. 함수 시작 시점의 시간 기록 (성능 측정용)
         start_time = time.time()
         
-        # 2. 처리 카운트 초기화
+        # 2. 처리 카운트 초기화 (성능 측정용)
         total_processed_count = 0
 
-        # 3. 옵션에서 default_vars가 있으면 적용
+        # 3. 옵션에서 default_vars가 있으면 적용 (선택)
         if "default_vars" in options:
             self.default_vars = options["default_vars"]
-            _LOGGER.debug(f"[get_data] apply default vars: {self.default_vars}")
 
         # 4. 옵션에서 field_mapper가 있으면 적용
         if "field_mapper" in options:
             self.field_mapper = options["field_mapper"]
-            _LOGGER.debug(f"[get_data] apply field mapper: {self.field_mapper}")
 
         # 5. 옵션에서 type_mapper가 있으면 적용
         if "type_mapper" in options:
@@ -79,28 +77,34 @@ class CostManager(BaseManager):
         if task_options is None:
             task_options = {}
 
-        # 7. 데이터 소스 결정: task_options에 base_url이 있으면 HTTP 파일에서 수집
+        # 7. 데이터 소스 분기 처리: task_options에 base_url이 있으면 HTTP 파일에서 수집
         if "base_url" in task_options:
             base_url = task_options["base_url"]
-            # 7-1. HTTPFileConnector 인스턴스 생성 및 세션 생성
+            # 7-1. HTTPFileConnector 인스턴스 생성
             http_file_connector = self.locator.get_connector(HTTPFileConnector)
+            # 7-2. HTTPFileConnector 인스턴스 세션 생성
             http_file_connector.create_session(options, secret_data, schema)
-            # 7-2. 비용 데이터 스트림 생성
+            # 7-3. 비용 데이터 스트림 생성
             response_stream = http_file_connector.get_cost_data(base_url)
         # 8. task_options에 bucket_name이 있으면 Google Cloud Storage에서 수집
         elif "bucket_name" in task_options:
             # 8-1. Google Cloud Storage용 처리
-            bucket_name = task_options["bucket_name"]
-            storage_connector = self.locator.get_connector(
-                GoogleStorageConnector, secret_data=secret_data
-            )
-            response_stream = storage_connector.get_cost_data(bucket_name)
+            # 8-2. GoogleStorageConnector 인스턴스 생성
+            storage_connector = self.locator.get_connector(GoogleStorageConnector, secret_data=secret_data)
+            # 8-3. GoogleStorageConnector 인스턴스 세션 생성
+            storage_connector.create_session(options, secret_data, schema)
+            # 8-4. 비용 데이터 스트림 생성
+            response_stream = storage_connector.get_cost_data(task_options)
+        # 9. 위 조건이 모두 없으면 options.base_url로 fallback (선택)
         else:
-            # 9. 위 조건이 모두 없으면 options.base_url로 fallback
+            # 9-1. options에 base_url이 있으면 HTTP 파일에서 수집
             if "base_url" in options:
                 base_url = options["base_url"]
-                http_file_connector = self.locator.get_connector(HTTPFileConnector)
+                # 9-2. HTTPFileConnector 인스턴스 생성  
+                http_file_connector = self.locator.get_connector(HTTPFileConnector) 
+                # 9-3. HTTPFileConnector 인스턴스 세션 생성
                 http_file_connector.create_session(options, secret_data, schema)
+                # 9-4. 비용 데이터 스트림 생성
                 response_stream = http_file_connector.get_cost_data(base_url)
             else:
                 # 10. 모든 경로가 없으면 예외 발생
@@ -110,13 +114,13 @@ class CostManager(BaseManager):
         for results in response_stream:
             # 11-1. 원본 데이터를 SpaceONE 비용 데이터 포맷으로 변환
             costs_data = self._make_cost_data(results)
-            # 11-2. 처리된 데이터 개수 카운트
+            # 11-2. 처리된 데이터 개수 카운트 (성능 측정용)
             total_processed_count += len(costs_data)
             # 11-3. 변환된 데이터를 제너레이터로 반환
             yield {"results": costs_data}
 
-        # 12. 전체 처리 시간 및 처리 카운트 로깅
-        _LOGGER.debug(f"duration: {time.time() - start_time:.2f}s, total_processed_count: {total_processed_count}")
+        # 12. 전체 처리 시간 및 처리 카운트 로깅 (성능 측정용)
+        _LOGGER.debug(f"count: {total_processed_count}, duration: {time.time() - start_time:.2f}s")
 
     def _make_cost_data(self, results):
         """
@@ -571,3 +575,72 @@ class CostManager(BaseManager):
                 if isinstance(account_id, int) or isinstance(account_id, float):
                     result["additional_info"]["Account ID"] = str(account_id).zfill(12)
         return result
+
+    def get_linked_accounts(self, options, secret_data, schema):
+        """연결된 계정(Linked Accounts) 정보를 조회하는 메서드
+        
+        HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집할 때
+        연결된 계정들의 목록을 반환합니다. 현재는 기본적인 구조만 제공하며,
+        실제 구현은 데이터 소스에 따라 달라질 수 있습니다.
+        
+        Args:
+            options (dict): 플러그인 옵션 정보 (base_url, field_mapper, default_vars 등)
+            secret_data (dict): 인증 정보 (private_key 포함)
+            schema (str): 스키마 정보 (선택적)
+            
+        Returns:
+            dict: 연결된 계정 정보 리스트
+                - account_id (str): 계정 ID
+                - name (str): 계정명
+                
+        Raises:
+            Exception: 계정 정보 조회 중 오류 발생 시
+        """
+        try:
+            _LOGGER.info("[get_linked_accounts] 시작: 연결된 계정 정보 조회")
+            
+            # 1. 데이터 소스 타입 확인
+            # options에서 base_url이 있으면 HTTP 파일, bucket_name이 있으면 Google Cloud Storage
+            data_source_type = "unknown"
+            if "base_url" in options:
+                data_source_type = "http_file"
+            elif "bucket_name" in options:
+                data_source_type = "google_storage"
+            
+            _LOGGER.debug(f"[get_linked_accounts] 데이터 소스 타입: {data_source_type}")
+            
+            # 2. 데이터 소스별 연결된 계정 조회 로직
+            # TODO: 실제 구현에서는 각 데이터 소스에서 계정 정보를 추출해야 함
+            # 현재는 기본 구조만 제공
+            
+            linked_accounts = []
+            
+            if data_source_type == "http_file":
+                # HTTP 파일에서 계정 정보 추출 로직
+                # TODO: HTTP 파일에서 계정 정보를 파싱하는 로직 구현 필요
+                _LOGGER.warning("[get_linked_accounts] HTTP 파일에서 계정 정보 추출 로직이 구현되지 않음")
+                
+            elif data_source_type == "google_storage":
+                # Google Cloud Storage에서 계정 정보 추출 로직
+                # TODO: Google Cloud Storage에서 계정 정보를 추출하는 로직 구현 필요
+                _LOGGER.warning("[get_linked_accounts] Google Cloud Storage에서 계정 정보 추출 로직이 구현되지 않음")
+                
+            else:
+                # 알 수 없는 데이터 소스 타입
+                _LOGGER.warning(f"[get_linked_accounts] 알 수 없는 데이터 소스 타입: {data_source_type}")
+            
+            # 3. 기본 계정 정보 반환 (구현 전 임시)
+            # 실제로는 위에서 추출한 계정 정보를 반환해야 함
+            default_account = {
+                "account_id": "default",
+                "name": "default"
+            }
+            linked_accounts.append(default_account)
+            
+            _LOGGER.info(f"[get_linked_accounts] 완료: {len(linked_accounts)}개 계정 정보 조회")
+            
+            return linked_accounts
+            
+        except Exception as e:
+            _LOGGER.error(f"[get_linked_accounts] 오류 발생: {e}", exc_info=True)
+            raise e

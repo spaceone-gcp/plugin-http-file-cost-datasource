@@ -5,15 +5,15 @@ from spaceone.core.unittest.result import print_data
 from spaceone.core.unittest.runner import RichTestRunner
 from spaceone.core import config
 from spaceone.core.transaction import Transaction
-from cloudforet.cost_analysis.service.job_service import JobService
-from cloudforet.cost_analysis.connector.http_file_connector import HTTPFileConnector
+from plugin.service.job_service import JobService
+from plugin.connector.http_file_connector import HTTPFileConnector
 from test.factory.common_config import OPTIONS
 
 
 class TestJobService(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        config.init_conf(package="cloudforet.cost_analysis")
+        config.init_conf(package="plugin")
         cls.transaction = Transaction({"service": "cost_analysis", "api_class": "Cost"})
         super().setUpClass()
 

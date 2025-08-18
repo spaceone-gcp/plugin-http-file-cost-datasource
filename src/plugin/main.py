@@ -141,18 +141,16 @@ def cost_get_data(params: dict) -> Generator[dict, None, None]:
     secret_data = params["secret_data"]  # 인증 정보 추출
 
     # 2. PEM 키 정리 (다양한 줄바꿈 문자 처리)
-    # Google Cloud 인증을 위해 PEM 포맷의 private_key를 정리
-    secret_data['private_key'] = _clean_pem(secret_data['private_key'])
+    if 'private_key' in secret_data:
+        secret_data['private_key'] = _clean_pem(secret_data['private_key'])  # Google Cloud 인증을 위해 PEM 포맷의 private_key를 정리
 
     # 3. 선택적 파라미터 추출 (기본값 설정)
-    # task_options가 없으면 빈 dict로 대체
-    task_options = params.get("task_options", {})
+    task_options = params.get("task_options", {})  # task_options가 없으면 빈 dict로 대체
     schema = params.get("schema")  # 스키마 정보 추출 (선택)
 
     try:
         # 4. CostManager를 통해 데이터 수집 시작
-        # get_data는 Generator를 반환하므로 메모리 효율적으로 대용량 데이터 처리 가능
-        result_generator = CostManager().get_data(options, secret_data, schema, task_options)
+        result_generator = CostManager().get_data(options, secret_data, schema, task_options)  # get_data는 Generator를 반환하므로 메모리 효율적으로 대용량 데이터 처리 가능
 
         # 5. 수집된 데이터를 하나씩 yield하여 스트리밍 방식으로 반환
         for result in result_generator:
@@ -168,42 +166,85 @@ def cost_get_data(params: dict) -> Generator[dict, None, None]:
 
 @app.route("Cost.get_linked_accounts")
 def cost_get_linked_accounts(params: dict) -> dict:
-    """ get linked accounts
-
+    """ 연결된 계정(Linked Accounts) 정보를 조회하는 함수
+    
+    이 함수는 SpaceONE 플러그인의 gRPC 엔드포인트로, HTTP 파일이나 Google Cloud Storage에서
+    비용 데이터를 수집할 때 연결된 계정들의 목록을 반환합니다.
+    
+    현재 구현 상태: CostManager.get_linked_accounts() 메서드가 구현되지 않아 AttributeError 발생 가능
+    
     Args:
-        params: (CostGetLinkedAccountsRequest): {
-            'options': 'dict'
-            'schema': 'str'
-            'secret_data': 'dict'
-            'domain_id': 'str'
-        }
+        params (dict): CostGetLinkedAccountsRequest 형태의 파라미터
+            - options (dict): 플러그인 옵션 정보 (base_url, field_mapper, default_vars 등)
+            - schema (str): 스키마 정보 (선택적)
+            - secret_data (dict): 인증 정보 (private_key 포함)
+            - domain_id (str): SpaceONE 도메인 ID
 
     Returns:
-        {
-            'account_id': 'str'
-            'name': 'str'
-        }
+        dict: 연결된 계정 정보 리스트
+            - account_id (str): 계정 ID
+            - name (str): 계정명
+            
+    Raises:
+        ValueError: PEM 형식이 올바르지 않을 때
+        AttributeError: CostManager.get_linked_accounts() 메서드가 구현되지 않았을 때
+        Exception: 기타 오류 발생 시
     """
-    options = params["options"]
-    secret_data = params["secret_data"]
-    secret_data['private_key'] = _clean_pem(secret_data['private_key'])
+    # 1. 필수 파라미터 추출
+    options = params["options"]  # 플러그인 옵션 정보 추출
+    secret_data = params["secret_data"]  # 인증 정보 추출
+    
+    # 2. PEM 키 정리 (다양한 줄바꿈 문자 처리)
+    # Google Cloud 인증을 위해 PEM 포맷의 private_key를 정리
+    if 'private_key' in secret_data:
+        secret_data['private_key'] = _clean_pem(secret_data['private_key'])
 
-    schema = params.get("schema")
+    # 3. 선택적 파라미터 추출
+    schema = params.get("schema")  # 스키마 정보 추출 (없으면 None)
 
-    cost_mgr = CostManager()
-    return cost_mgr.get_linked_accounts(options, secret_data, schema)
+    # 4. CostManager 인스턴스 생성 및 연결된 계정 조회
+    try:
+        _LOGGER = logging.getLogger("spaceone")
+        _LOGGER.info("[cost_get_linked_accounts] CostManager.get_linked_accounts 호출 시작")
+        result = CostManager().get_linked_accounts(options, secret_data, schema)
+        _LOGGER.info(f"[cost_get_linked_accounts] CostManager.get_linked_accounts 완료: {result}")
+        _LOGGER.info(f"[cost_get_linked_accounts] Result type: {type(result)}")
+        _LOGGER.info(f"[cost_get_linked_accounts] Result length: {len(result) if isinstance(result, list) else 'N/A'}")
+        return result
+    except Exception as e:
+        _LOGGER = logging.getLogger("spaceone")
+        _LOGGER.error(f"[cost_get_linked_accounts] Error in get_linked_accounts: {e}", exc_info=True)
+        raise e
 
 
 def _clean_pem(pem_key: str) -> str:
-    # 여러 형태의 줄바꿈 문자를 정리
+    """PEM 형식의 private key를 정리하고 검증하는 함수
+    
+    Google Cloud 인증을 위해 PEM 포맷의 private key에서 다양한 줄바꿈 문자를
+    표준 형식으로 변환하고, PEM 형식의 유효성을 검증합니다.
+    
+    Args:
+        pem_key (str): 정리할 PEM 형식의 private key 문자열
+        
+    Returns:
+        str: 정리된 PEM 형식의 private key 문자열
+        
+    Raises:
+        ValueError: PEM 형식이 올바르지 않을 때
+            - '-----BEGIN PRIVATE KEY-----'로 시작하지 않을 때
+            - '-----END PRIVATE KEY-----'로 끝나지 않을 때
+    """
+    # 1. 여러 형태의 줄바꿈 문자를 표준 형식으로 정리
+    # \n, \r\n, \r 등 다양한 줄바꿈 문자를 \n으로 통일
     cleaned = pem_key.replace('\\n', '\n')
     cleaned = cleaned.replace('\\r\\n', '\n')
     cleaned = cleaned.replace('\\r', '\n')
     
-    # 앞뒤 공백 제거
+    # 2. 앞뒤 공백 제거
     cleaned = cleaned.strip()
     
-    # PEM 형식 검증
+    # 3. PEM 형식 검증
+    # Google Cloud 인증을 위한 표준 PEM 형식 검증
     if not cleaned.startswith('-----BEGIN PRIVATE KEY-----'):
         raise ValueError("Invalid PEM format: must start with '-----BEGIN PRIVATE KEY-----'")
     if not cleaned.endswith('-----END PRIVATE KEY-----'):

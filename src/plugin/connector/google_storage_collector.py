@@ -2,7 +2,6 @@ import logging
 import os
 import tempfile
 import gzip
-import io
 from typing import List, Dict, Generator, Any
 
 import google.oauth2.service_account
@@ -24,14 +23,15 @@ from spaceone.core.connector import BaseConnector
 from spaceone.core.error import ERROR_UNKNOWN
 
 # 상수 정의
-_PAGE_SIZE = 1000
+_PAGE_SIZE = 1000  # 페이지 크기
 _MIN_FILE_SIZE = 50  # 최소 파일 크기 (바이트)
 _MAX_FILENAME_LENGTH = 100  # 최대 파일명 길이
 _MAX_FINAL_FILENAME_LENGTH = 150  # 최종 파일명 최대 길이
 _UNDERSCORE_RATIO_THRESHOLD = 0.3  # 언더스코어 비율 임계값
 _SUPPORTED_EXTENSIONS = ['.csv', '.json', '.json.gz', '.parquet', '.parquet.gz', '.parquet.snappy', '.parquet.zst', '.parquet.sz', '.parquet.zstd']  # 지원되는 파일 확장자
 _CSV_SEPARATORS = [',', ';', '\t', '|']  # CSV 구분자 목록
-_LOGGER = logging.getLogger("spaceone")
+_LOGGER = logging.getLogger("spaceone")  # 로거 설정
+
 class GoogleStorageConnector(BaseConnector):
     """
     Google Cloud Storage에서 비용 데이터를 수집하는 커넥터
@@ -39,8 +39,8 @@ class GoogleStorageConnector(BaseConnector):
     Google Cloud Storage 버킷에 저장된 CSV/JSON 형태의 비용 데이터를
     다운로드하고 파싱하여 비용 정보를 추출합니다.
     """
-    google_client_service = "storage"
-    version = "v1"
+    google_client_service = "storage"  # 서비스 이름
+    version = "v1"  # 버전
 
     def __init__(self, *args, **kwargs):
         """
@@ -50,20 +50,42 @@ class GoogleStorageConnector(BaseConnector):
             *args: 기본 인자들
             **kwargs: 키워드 인자들 (secret_data 포함)
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)  # 기본 설정값들을 None으로 초기화
 
-        self.secret_data = kwargs.get("secret_data")
-        self.project_id = self.secret_data.get("project_id")
+        self.secret_data = kwargs.get("secret_data")  # 시크릿 데이터 가져오기
+        self.project_id = self.secret_data.get("project_id")  # 프로젝트 아이디 가져오기
         self.credentials = (
             google.oauth2.service_account.Credentials.from_service_account_info(
-                self.secret_data
+                self.secret_data  # 시크릿 데이터 가져오기
             )
-        )
-        self.client = storage.Client(
-            project=self.secret_data["project_id"], credentials=self.credentials
-        )
+        )  # 자격 증명 가져오기
+        self.client = storage.Client(  # 클라이언트 생성
+            project=self.secret_data["project_id"], credentials=self.credentials  # 프로젝트 아이디 및 자격 증명 설정
+        )  # 클라이언트 생성
 
-    def get_cost_data(self, bucket_name: str) -> Generator[List[Dict[str, Any]], None, None]:
+    def create_session(self, options: dict, secret_data: dict, schema: str = None) -> None:
+        """
+        세션 생성 및 설정
+        
+        Args:
+            options: 설정 옵션 (현재 사용되지 않음)
+            secret_data: 인증 정보
+            schema: 스키마 정보 (현재 사용되지 않음)
+        """
+        # secret_data가 제공된 경우 자격 증명 업데이트
+        if secret_data:  
+            self.secret_data = secret_data  # 시크릿 데이터 업데이트
+            self.project_id = secret_data.get("project_id")  # 프로젝트 아이디 업데이트
+            self.credentials = (  # 자격 증명 업데이트
+                google.oauth2.service_account.Credentials.from_service_account_info(
+                    secret_data
+                )
+            )
+            self.client = storage.Client(  # 클라이언트 업데이트
+                project=secret_data["project_id"], credentials=self.credentials
+            )
+
+    def get_cost_data(self, task_options: dict) -> Generator[List[Dict[str, Any]], None, None]:  # 비용 데이터 가져오기
         """
         Google Cloud Storage 버킷에서 비용 데이터를 수집하는 메인 함수
         
@@ -71,7 +93,7 @@ class GoogleStorageConnector(BaseConnector):
         비용 데이터를 파싱하여 페이지네이션 형태로 반환합니다.
         
         Args:
-            bucket_name (str): Google Cloud Storage 버킷 이름
+            task_options (dict): 작업 옵션 (bucket_name 포함)
             
         Yields:
             List[Dict[str, Any]]: 비용 데이터 리스트 (페이지당 최대 1000개)
@@ -81,7 +103,12 @@ class GoogleStorageConnector(BaseConnector):
             ERROR_FILE_DOWNLOAD_FAILED: 파일 다운로드 실패 시
             ERROR_UNKNOWN: 기타 알 수 없는 오류
         """
-        # 1. 버킷 객체 가져오기
+        # 1. bucket_name 추출
+        bucket_name = task_options.get("bucket_name")
+        if not bucket_name:
+            raise ERROR_REQUIRED_PARAMETER(key="task_options.bucket_name")
+        
+        # 2. 버킷 객체 가져오기
         bucket = self.client.get_bucket(bucket_name)
         # 2. 버킷 내 모든 blob 이름 리스트업
         blob_names = [blob.name for blob in bucket.list_blobs()]
@@ -135,8 +162,8 @@ class GoogleStorageConnector(BaseConnector):
                 # 15. 페이지네이션 처리 (1000개씩 분할)
                 page_count = int(len(costs_data) / _PAGE_SIZE) + 1
                 for page_num in range(page_count):
-                    offset = _PAGE_SIZE * page_num
-                    yield costs_data[offset : offset + _PAGE_SIZE]
+                    offset = _PAGE_SIZE * page_num  # 오프셋 계산
+                    yield costs_data[offset : offset + _PAGE_SIZE]  # 페이지네이션 처리
                 # 16. 임시 파일 정리(삭제)
                 self._cleanup_temp_file(temp_file_path)
 
@@ -151,7 +178,7 @@ class GoogleStorageConnector(BaseConnector):
         Raises:
             ERROR_REQUIRED_PARAMETER: bucket_name이 없는 경우
         """
-        if "bucket_name" not in options:
+        if "bucket_name" not in options:  # bucket_name이 없는 경우 예외 발생
             raise ERROR_REQUIRED_PARAMETER(key="options.bucket_name")
 
     @staticmethod
@@ -167,10 +194,10 @@ class GoogleStorageConnector(BaseConnector):
             ERROR_NO_DATA_FOUND: DataFrame이 비어있는 경우
             ERROR_NO_COLUMNS: 컬럼이 없는 경우
         """
-        if df.empty:
+        if df.empty:  # DataFrame이 비어있는 경우 예외 발생
             _LOGGER.error(f"DataFrame is empty after parsing: {file_path}")
             raise ERROR_NO_DATA_FOUND(file_path=file_path)
-        
+
         if len(df.columns) == 0:
             _LOGGER.error(f"No columns found in file: {file_path}")
             raise ERROR_NO_COLUMNS(file_path=file_path)
@@ -188,8 +215,8 @@ class GoogleStorageConnector(BaseConnector):
         Returns:
             str: 안전한 임시 파일명
         """
-        import hashlib
-        import re
+        import hashlib  # 해시 모듈 임포트
+        import re  # 정규 표현식 모듈 임포트
         
         # 1. 경로 구분자를 언더스코어로 변경
         normalized_name = blob_name.replace('/', '_').replace('\\', '_')
@@ -210,21 +237,21 @@ class GoogleStorageConnector(BaseConnector):
         # 6. 빈 파일명이면 기본값 사용
         if not safe_base_name:
             safe_base_name = "billing_data"
-        
-        safe_filename = safe_base_name + extension
+
+        safe_filename = safe_base_name + extension  # 확장자 보존
         
         # 7. 파일명이 너무 길거나 언더스코어 비율이 높으면 해시 적용
         if (len(safe_filename) > _MAX_FILENAME_LENGTH or 
-            safe_filename.count('_') > len(safe_filename) * _UNDERSCORE_RATIO_THRESHOLD):
-            filename_hash = hashlib.md5(blob_name.encode()).hexdigest()
-            file_extension = os.path.splitext(blob_name)[1] if '.' in blob_name else ''
-            safe_filename = f"billing_data_{filename_hash}{file_extension}"
+            safe_filename.count('_') > len(safe_filename) * _UNDERSCORE_RATIO_THRESHOLD):  # 파일명이 너무 길거나 언더스코어 비율이 높으면 해시 적용
+            filename_hash = hashlib.md5(blob_name.encode()).hexdigest()  # 해시 생성
+            file_extension = os.path.splitext(blob_name)[1] if '.' in blob_name else ''  # 확장자 추출
+            safe_filename = f"billing_data_{filename_hash}{file_extension}"  # 파일명 생성
         
         # 8. 최종 파일명이 여전히 너무 길면 더 짧게 해시 적용
-        if len(safe_filename) > _MAX_FINAL_FILENAME_LENGTH:
-            filename_hash = hashlib.md5(blob_name.encode()).hexdigest()[:8]
-            file_extension = os.path.splitext(blob_name)[1] if '.' in blob_name else ''
-            safe_filename = f"billing_{filename_hash}{file_extension}"
+        if len(safe_filename) > _MAX_FINAL_FILENAME_LENGTH:  # 최종 파일명이 너무 길면 더 짧게 해시 적용
+            filename_hash = hashlib.md5(blob_name.encode()).hexdigest()[:8]  # 해시 생성
+            file_extension = os.path.splitext(blob_name)[1] if '.' in blob_name else ''  # 확장자 추출
+            safe_filename = f"billing_{filename_hash}{file_extension}"  # 파일명 생성
         
         return safe_filename
 
@@ -236,13 +263,12 @@ class GoogleStorageConnector(BaseConnector):
             temp_file_path (str): 삭제할 임시 파일 경로
         """
         try:
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+            if os.path.exists(temp_file_path):  # 임시 파일이 존재하는지 확인
+                os.remove(temp_file_path)  # 임시 파일 삭제
                 _LOGGER.debug(f"Successfully cleaned up temporary file: {temp_file_path}")
-        except Exception as e:
+        except Exception as e:  # 기타 예외 발생
             _LOGGER.warning(f"Failed to clean up temporary file {temp_file_path}: {e}")
 
-    @staticmethod
     @staticmethod
     def _parse_cost_file(cost_file: str) -> List[Dict[str, Any]]:
         """
@@ -324,8 +350,6 @@ class GoogleStorageConnector(BaseConnector):
             # 2. 파일이 비어있는지 확인
             if not content:
                 _LOGGER.error(f"[_read_csv_file] File is empty: {csv_file}")
-                _LOGGER.error(f"[_read_csv_file] File size: {os.path.getsize(csv_file)} bytes")
-                _LOGGER.error(f"[_read_csv_file] File exists: {os.path.exists(csv_file)}")
                 raise ERROR_EMPTY_FILE(file_path=csv_file)
 
             # 3. 파일을 줄 단위로 분리
