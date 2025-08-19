@@ -160,9 +160,13 @@ class CostManager(BaseManager):
                 if result.get("provider") == "csv":  # csv 파일인 경우 cost, usage_quantity 필드 사용
                     credits_amount = Decimal(0)
                     usage_quantity = Decimal(result.get("usage_quantity") or 0)
+                    region_code = result.get("region_code") or ""
+                    product = result.get("product") or ""
                 else: 
                     credits_amount = Decimal(result.get("credits.amount") or 0)
                     usage_quantity = Decimal(result.get("usage.amount_in_pricing_units") or 0)
+                    region_code = result.get("location.region") or ""
+                    product = result.get("service.description") or ""
                 # 1-10. cost + credits.amount 합산 (Decimal로 변환 후 합산)
                 total_cost = cost + credits_amount
                 # 1-11. 최종 데이터 딕셔너리 생성 (SpaceONE 포맷)
@@ -172,8 +176,8 @@ class CostManager(BaseManager):
                     "usage_type": result.get("sku.description") or "",  # SKU 설명(사용 유형, 없으면 빈 문자열)
                     "usage_unit": result.get("usage.pricing_unit") or "",  # 사용 단위(없으면 빈 문자열)
                     "provider": result.get("provider") or "",  # 클라우드 제공자(없으면 빈 문자열)
-                    "region_code": result.get("region_code") or "",  # 리전 코드(없으면 빈 문자열)
-                    "product": result.get("service.description") or "",  # 서비스/제품명(없으면 빈 문자열)
+                    "region_code": str(region_code),  # 리전 코드(없으면 빈 문자열)
+                    "product": str(product),  # 서비스/제품명(없으면 빈 문자열)
                     "resource": result.get("resource", ""),  # 리소스명(없으면 빈 문자열)
                     "billed_date": result.get("billed_date", ""),  # 청구 날짜(필수, usage_start_time 기준)
                     "additional_info": result.get("additional_info") or {},  # 추가 정보(없으면 빈 dict)
