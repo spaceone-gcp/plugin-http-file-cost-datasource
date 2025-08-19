@@ -107,64 +107,63 @@ class GoogleStorageConnector(BaseConnector):
         bucket_name = task_options.get("bucket_name")
         if not bucket_name:
             raise ERROR_REQUIRED_PARAMETER(key="task_options.bucket_name")
-        
         # 2. 버킷 객체 가져오기
         bucket = self.client.get_bucket(bucket_name)
-        # 2. 버킷 내 모든 blob 이름 리스트업
+        # 3. 버킷 내 모든 blob 이름 리스트업
         blob_names = [blob.name for blob in bucket.list_blobs()]
-        # 3. 각 blob(파일) 순회
+        # 4. 각 blob(파일) 순회
         for blob_name in blob_names:
-            # 3-1. 디렉토리 또는 빈 blob 이름은 건너뜀
+            # 4-1. 디렉토리 또는 빈 blob 이름은 건너뜀
             if not blob_name.strip() or blob_name.endswith('/'):
                 continue
-            # 3-2. blob 객체 가져오기
+            # 4-2. blob 객체 가져오기
             blob = bucket.get_blob(blob_name)
             if blob:
-                # 4. 파일 확장자 검증
+                # 5. 파일 확장자 검증
                 file_extension = os.path.splitext(blob_name)[1].lower()
                 if file_extension not in _SUPPORTED_EXTENSIONS:
                     _LOGGER.warning(f"[get_cost_data] Skipping unsupported file type: {blob_name} (extension: {file_extension})")
                     continue
-                # 5. Blob이 비어있는지 미리 확인
+                # 6. Blob이 비어있는지 미리 확인
                 if blob.size == 0:
                     raise ERROR_EMPTY_FILE(file_path=blob_name)
-                # 6. Blob 크기가 너무 작은 경우 경고 (헤더만 있을 수 있음)
+                # 7. Blob 크기가 너무 작은 경우 경고 (헤더만 있을 수 있음)
                 if blob.size < _MIN_FILE_SIZE:
                     _LOGGER.warning(f"[get_cost_data] Blob size is very small: {blob.size} bytes for {blob_name}")
                     _LOGGER.warning("[get_cost_data] This might indicate an empty or header-only file")
-                # 7. 임시 디렉토리 경로 확보
+                # 8. 임시 디렉토리 경로 확보
                 tmpdir = tempfile.gettempdir()
-                # 8. 안전한 임시 파일명 생성
+                # 9. 안전한 임시 파일명 생성
                 safe_filename = self._generate_safe_filename(blob_name)
-                # 9. 임시 파일 전체 경로 생성
+                # 10. 임시 파일 전체 경로 생성
                 temp_file_path = os.path.join(tmpdir, safe_filename)
-                # 10. blob 파일을 임시 파일로 안전하게 다운로드
+                # 11. blob 파일을 임시 파일로 안전하게 다운로드
                 try:
                     blob.download_to_filename(temp_file_path)
                 except Exception:
                     raise ERROR_FILE_DOWNLOAD_FAILED(file_path=blob_name)
-                # 11. 파일이 실제로 다운로드되었는지 확인
+                # 12. 파일이 실제로 다운로드되었는지 확인
                 if not os.path.exists(temp_file_path):
                     raise ERROR_UNKNOWN(message=f"Failed to download file: {blob_name} to {temp_file_path}")
-                # 12. 파일 크기 확인
+                # 13. 파일 크기 확인
                 file_size = os.path.getsize(temp_file_path)
-                # 13. 파일이 비어있으면 예외 발생
+                # 14. 파일이 비어있으면 예외 발생
                 if file_size == 0:
-                    # 13-1. 파일 내용 미리보기 시도(디버깅용)
+                    # 14-1. 파일 내용 미리보기 시도(디버깅용)
                     try:
                         with open(temp_file_path, 'rb') as f:
                             f.read(200)
                     except Exception as e:
                         _LOGGER.error(f"[get_cost_data] Failed to read file content: {e}")
                     raise ERROR_EMPTY_FILE(file_path=blob_name)
-                # 14. 파일에서 비용 데이터 읽기 (CSV/JSON/Parquet 자동 판별)
+                # 15. 파일에서 비용 데이터 읽기 (CSV/JSON/Parquet 자동 판별)
                 costs_data = self._parse_cost_file(temp_file_path)
-                # 15. 페이지네이션 처리 (1000개씩 분할)
+                # 16. 페이지네이션 처리 (1000개씩 분할)
                 page_count = int(len(costs_data) / _PAGE_SIZE) + 1
                 for page_num in range(page_count):
                     offset = _PAGE_SIZE * page_num  # 오프셋 계산
                     yield costs_data[offset : offset + _PAGE_SIZE]  # 페이지네이션 처리
-                # 16. 임시 파일 정리(삭제)
+                # 17. 임시 파일 정리(삭제)
                 self._cleanup_temp_file(temp_file_path)
 
     @staticmethod

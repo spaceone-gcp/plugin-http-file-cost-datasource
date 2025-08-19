@@ -118,7 +118,7 @@ def cost_get_data(params: dict) -> Generator[dict, None, None]:
         각 yield되는 데이터는 다음과 같은 구조를 가집니다:
         {
             'cost': 'float',           # 비용 금액 (필수)
-            'usage_quantity': 'float', # 사용량 (선택)
+            'usage_quantity': 'str',   # 사용량 (선택)
             'usage_unit': 'str',       # 사용량 단위 (선택)
             'provider': 'str',         # 클라우드 제공자 (선택)
             'region_code': 'str',      # 리전 코드 (선택)

@@ -46,7 +46,9 @@ def CostInfo(cost_data):
     try:
         # Decimal 타입을 float로 변환하여 출력 (과학적 표기법 방지)
         cost_value = cost_data["cost"]
-        if isinstance(cost_value, Decimal):
+        if cost_value is None:
+            cost_value = 0.0
+        elif isinstance(cost_value, Decimal):
             # 과학적 표기법을 완전히 방지하기 위해 format 함수 사용
             cost_value_str = format(cost_value, 'f')
             # 불필요한 0 제거
@@ -58,18 +60,18 @@ def CostInfo(cost_data):
             else:
                 cost_value = float(cost_value_str) if cost_value_str else 0.0
             
-        usage_quantity_value = cost_data.get("usage_quantity")
-        if isinstance(usage_quantity_value, Decimal):
-            # 과학적 표기법을 완전히 방지하기 위해 format 함수 사용
-            usage_quantity_value_str = format(usage_quantity_value, 'f')
-            # 불필요한 0 제거
-            usage_quantity_value_str = usage_quantity_value_str.rstrip('0').rstrip('.')
-            # 문자열을 float로 변환하되, 매우 작은 값은 문자열로 유지
-            if usage_quantity_value_str and float(usage_quantity_value_str) < 0.0001:
-                # 매우 작은 값은 문자열로 유지하여 과학적 표기법 방지
-                usage_quantity_value = usage_quantity_value_str
-            else:
-                usage_quantity_value = float(usage_quantity_value_str) if usage_quantity_value_str else 0.0
+        usage_quantity_value = cost_data.get("usage_quantity", 0)
+        # if isinstance(usage_quantity_value, Decimal):
+        #     # 과학적 표기법을 완전히 방지하기 위해 format 함수 사용
+        #     usage_quantity_value_str = format(usage_quantity_value, 'f')
+        #     # 불필요한 0 제거
+        #     usage_quantity_value_str = usage_quantity_value_str.rstrip('0').rstrip('.')
+        #     # 문자열을 float로 변환하되, 매우 작은 값은 문자열로 유지
+        #     if usage_quantity_value_str and float(usage_quantity_value_str) < 0.0001:
+        #         # 매우 작은 값은 문자열로 유지하여 과학적 표기법 방지
+        #         usage_quantity_value = usage_quantity_value_str
+        #     else:
+        #         usage_quantity_value = float(usage_quantity_value_str) if usage_quantity_value_str else 0.0
         
         # 비용 데이터를 SpaceONE API 형식에 맞게 매핑
         info = {
