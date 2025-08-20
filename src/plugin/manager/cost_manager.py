@@ -21,7 +21,7 @@ class CostDataProcessingError(Exception):
 
 class CostManagerConfig:
     """CostManager 설정 상수 클래스"""
-    REQUIRED_FIELDS = ["cost", "currency", "billed_date"]  # 필수 필드 목록
+    REQUIRED_FIELDS = []  # 필수 필드 목록
     DEFAULT_DAY = "01"  # 기본 날짜
     INVOICE_MONTH_LENGTH = 6  # 청구 월 길이
     YEAR_START_INDEX = 0  # 연도 시작 인덱스
@@ -108,8 +108,26 @@ class CostManager(BaseManager):
             self.default_vars = options["default_vars"]
         if "field_mapper" in options:  # field_mapper 옵션이 있으면 설정
             self.field_mapper = options["field_mapper"]
+            self._validate_field_mapper_completeness()  # 필수 필드 매핑 검증
         if "type_mapper" in options:  # type_mapper 옵션이 있으면 설정
             self.type_mapper = options["type_mapper"]
+
+    def _validate_field_mapper_completeness(self) -> None:
+        """field_mapper 설정에서 필수 필드 매핑이 모두 포함되어 있는지 검증합니다."""
+        if not self.field_mapper:
+            _LOGGER.warning("field_mapper가 설정되지 않았습니다. 원본 데이터에 필수 필드가 직접 포함되어 있어야 합니다.")
+            return
+        
+        missing_fields = []  # 누락된 필드 목록
+        for required_field in CostManagerConfig.REQUIRED_FIELDS:  # 필수 필드 순회
+            if required_field not in self.field_mapper:  # 필수 필드가 매핑되지 않은 경우
+                missing_fields.append(required_field)  # 누락된 필드 추가
+        
+        if missing_fields:  # 누락된 필드가 있는 경우
+            _LOGGER.warning(
+                f"field_mapper에 다음 필수 필드 매핑이 누락되었습니다: {missing_fields}. "
+                f"원본 데이터에 해당 필드가 직접 포함되어 있거나 default_vars로 설정되어 있는지 확인하세요."
+            )
 
     def _get_data_stream(
         self, 
@@ -232,14 +250,38 @@ class CostManager(BaseManager):
 
     def _apply_field_mapper(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """field_mapper 설정에 따라 필드를 변환합니다."""
+        self._validate_field_mapping_consistency(result)  # 매핑 일치성 검증
+        
         for origin_field, actual_field in self.field_mapper.items():  # 필드 매핑 순회
             if isinstance(actual_field, str):  # 필드 타입 확인
                 if actual_field in result:  # 필드 존재 확인
                     result[origin_field] = result[actual_field]  # 필드 변경
-                    del result[actual_field]  # 원본 필드 삭제
+                    # 원본 필드는 삭제하지 않고 유지 (다른 매핑에서 사용할 수 있음)
             elif origin_field == "additional_info":  # additional_info 필드 매핑 처리
                 result = self._process_additional_info_mapping(result, actual_field)  # additional_info 필드 매핑 처리
         return result
+
+    def _validate_field_mapping_consistency(self, result: Dict[str, Any]) -> None:
+        """field_mapper 설정과 원본 데이터의 일치성을 검증합니다."""
+        if not self.field_mapper:  # field_mapper 설정이 없는 경우
+            return
+        
+        missing_source_fields = []  # 누락된 원본 필드 목록
+        available_fields = list(result.keys())  # 사용 가능한 필드 목록
+        
+        for target_field, source_field in self.field_mapper.items():  # 필드 매핑 순회
+            if isinstance(source_field, str):  # 단순 문자열 매핑인 경우
+                if source_field not in result:  # 원본 필드가 데이터에 존재하지 않는 경우
+                    missing_source_fields.append((target_field, source_field))  # 누락된 원본 필드 추가
+        
+        if missing_source_fields:  # 누락된 원본 필드가 있는 경우
+            error_message = "field_mapper에 설정된 원본 필드가 데이터에 존재하지 않습니다: "
+            missing_info = [f"{target} <- {source}" for target, source in missing_source_fields]  # 누락된 원본 필드 정보
+            error_message += f"{missing_info}. "  # 누락된 원본 필드 정보 추가
+            error_message += f"사용 가능한 필드: {available_fields}. "  # 사용 가능한 필드 정보 추가
+            error_message += "field_mapper 설정을 확인하거나 원본 데이터의 필드명을 확인하세요."
+            
+            # _LOGGER.warning(error_message)
 
     def _process_additional_info_mapping(
         self, 
@@ -353,21 +395,43 @@ class CostManager(BaseManager):
                 return True  # 날짜 처리 완료
         return False  # 날짜 처리 실패
 
-    def _parse_date(self, date: str) -> Any:
+    def _parse_date(self, date: Any) -> Any:
         """날짜 문자열을 파싱합니다."""
         if date is None:  # date 값 확인
             raise TypeError("날짜는 None일 수 없습니다")  # 예외 발생
-        try:
-            return parse(date)  # 날짜 파싱
-        except Exception as e:  # 예외 처리
-            _LOGGER.error(f"날짜 파싱 오류: {e}", exc_info=True)
-            raise e  # 예외 발생
+        
+        # 이미 파싱된 Timestamp 객체인 경우
+        if hasattr(date, 'strftime'):  # datetime 객체인지 확인
+            return date
+        
+        # 문자열인 경우 파싱
+        if isinstance(date, str):
+            try:
+                return parse(date)  # 날짜 파싱
+            except Exception as e:  # 예외 처리
+                _LOGGER.error(f"날짜 파싱 오류: {e}", exc_info=True)
+                raise e  # 예외 발생
+        else:
+            # 기타 타입의 경우 문자열로 변환 후 파싱 시도
+            try:
+                return parse(str(date))  # 문자열로 변환 후 파싱
+            except Exception as e:  # 예외 처리
+                _LOGGER.error(f"날짜 파싱 오류 (타입 변환 후): {e}", exc_info=True)
+                raise e  # 예외 발생
 
     @staticmethod
-    def _format_date_only(date_str: str) -> str:
+    def _format_date_only(date_str: Any) -> str:
         """날짜 문자열에서 시간 부분을 제거하고 YYYY-MM-DD 형태로 변환합니다."""
-        if not date_str or not isinstance(date_str, str):
+        if not date_str:
             return ""  # 빈 문자열 반환
+        
+        # 이미 datetime 객체인 경우
+        if hasattr(date_str, 'strftime'):
+            return date_str.strftime(CostManagerConfig.DATE_FORMAT)
+        
+        # 문자열이 아닌 경우 문자열로 변환
+        if not isinstance(date_str, str):
+            date_str = str(date_str)
         
         try:
             parsed_date = parse(date_str)  # 날짜 파싱
@@ -379,9 +443,36 @@ class CostManager(BaseManager):
 
     def _validate_required_fields(self, result: Dict[str, Any]) -> None:
         """필수 필드가 존재하는지 확인합니다."""
+        missing_fields = []  # 누락된 필드 목록
+        available_fields = list(result.keys())  # 사용 가능한 필드 목록
+        
         for field in CostManagerConfig.REQUIRED_FIELDS:  # 필수 필드 순회
             if field not in result:  # 필드 존재 확인
-                raise ERROR_REQUIRED_PARAMETER(key=field)  # 예외 발생
+                missing_fields.append(field)  # 누락된 필드 추가
+        
+        if missing_fields:  # 누락된 필드가 있는 경우
+            error_message = f"필수 필드가 누락되었습니다: {missing_fields}. "  # 누락된 필드 정보 추가
+            error_message += f"사용 가능한 필드: {available_fields}. "  # 사용 가능한 필드 정보 추가
+            
+            if self.field_mapper:  # field_mapper 설정이 있는 경우
+                error_message += f"현재 field_mapper 설정: {self.field_mapper}. "
+                # 매핑 가능한 필드 제안
+                suggested_mappings = []  # 제안된 매핑 목록
+                for missing_field in missing_fields:  # 누락된 필드 순회
+                    if missing_field == "cost" and "amount" in available_fields:  # cost 필드 확인
+                        suggested_mappings.append(f'"{missing_field}": "amount"')  # 제안된 매핑 추가
+                    elif missing_field == "billed_date" and "date" in available_fields:  # billed_date 필드 확인
+                        suggested_mappings.append(f'"{missing_field}": "date"')  # 제안된 매핑 추가
+                    elif missing_field == "currency" and "curr" in available_fields:  # currency 필드 확인
+                        suggested_mappings.append(f'"{missing_field}": "curr"')  # 제안된 매핑 추가
+                
+                if suggested_mappings:  # 제안된 매핑이 있는 경우
+                    error_message += f"제안되는 매핑: {{{', '.join(suggested_mappings)}}}. "  # 제안된 매핑 정보 추가
+            else:  # field_mapper 설정이 없는 경우
+                error_message += "field_mapper가 설정되지 않았습니다. 원본 데이터에 필수 필드가 직접 포함되어 있어야 합니다."  # 필수 필드 정보 추가
+            
+            # _LOGGER.error(error_message)
+            raise ERROR_REQUIRED_PARAMETER(key=missing_fields[0])  # 첫 번째 누락 필드로 예외 발생
 
     def _create_final_data(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """최종 SpaceONE 포맷 데이터를 생성합니다."""
