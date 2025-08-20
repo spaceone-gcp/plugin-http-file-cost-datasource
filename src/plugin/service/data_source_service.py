@@ -55,5 +55,6 @@ class DataSourceService(BaseService):
         options = params["options"]
         secret_data = params["secret_data"]
         schema = params.get("schema")
+        domain_id = params.get("domain_id")
 
-        return self.data_source_mgr.verify_plugin(options, secret_data, schema)
+        return self.data_source_mgr.verify_plugin(options, secret_data, schema, domain_id)
