@@ -91,7 +91,7 @@ class CostManager(BaseManager):
             
             total_processed_count = 0  # 처리된 데이터 개수 초기화
             for results in response_stream:  # 데이터 스트림 순회
-                costs_data = self._make_cost_data(results)  # 비용 데이터 생성
+                costs_data = self._make_cost_data(results, options)  # 비용 데이터 생성
                 total_processed_count += len(costs_data)  # 처리된 데이터 개수 업데이트
                 yield {"results": costs_data}  # 비용 데이터 반환
             
@@ -177,12 +177,13 @@ class CostManager(BaseManager):
         storage_connector.create_session(options, secret_data, schema)  # 세션 생성
         return storage_connector.get_cost_data(task_options)  # 데이터 스트림 반환
 
-    def _make_cost_data(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _make_cost_data(self, results: List[Dict[str, Any]], options: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         입력된 원본 비용 데이터를 SpaceONE 비용 데이터 포맷에 맞게 변환합니다.
 
         Args:
             results: 원본 비용 데이터 리스트
+            options: 플러그인 옵션 (cost_metric 등)
 
         Returns:
             SpaceONE 비용 데이터 포맷으로 변환된 리스트
@@ -194,7 +195,7 @@ class CostManager(BaseManager):
         
         for result in results:  # 결과 순회
             try:
-                processed_result = self._process_single_result(result)  # 단일 결과 처리
+                processed_result = self._process_single_result(result, options)  # 단일 결과 처리
                 costs_data.append(processed_result)  # 처리된 결과 추가
             except Exception as e:  # 예외 처리
                 _LOGGER.error(f"개별 결과 처리 중 오류: {e}", exc_info=True)
@@ -202,7 +203,7 @@ class CostManager(BaseManager):
         
         return costs_data
 
-    def _process_single_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _process_single_result(self, result: Dict[str, Any], options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """단일 결과를 처리합니다."""
         # 데이터 정제
         result = self._clean_data(result)
@@ -222,7 +223,7 @@ class CostManager(BaseManager):
         self._validate_required_fields(result)  # 필수 필드 검증
         
         # 최종 데이터 생성
-        return self._create_final_data(result)  # 최종 데이터 생성
+        return self._create_final_data(result, options)  # 최종 데이터 생성
 
     def _clean_data(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """데이터를 정제합니다."""
@@ -474,7 +475,7 @@ class CostManager(BaseManager):
             # _LOGGER.error(error_message)
             raise ERROR_REQUIRED_PARAMETER(key=missing_fields[0])  # 첫 번째 누락 필드로 예외 발생
 
-    def _create_final_data(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_final_data(self, result: Dict[str, Any], options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """최종 SpaceONE 포맷 데이터를 생성합니다."""
         cost = Decimal(result.get("cost") or 0)  # cost 추출
         
@@ -489,7 +490,11 @@ class CostManager(BaseManager):
             region_code = result.get("location.region") or ""  # location.region 추출
             product = result.get("service.description") or ""  # service.description 추출
         
-        total_cost = cost + credits_amount
+        # cost_metric이 AmortizedCost인 경우 credits_amount를 사용
+        if options and options.get("cost_metric") == "AmortizedCost":
+            total_cost = cost + credits_amount
+        else:
+            total_cost = cost
         
         return {
             "cost": str(total_cost),  # 총 비용
