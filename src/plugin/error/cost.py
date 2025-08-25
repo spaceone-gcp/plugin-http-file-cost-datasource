@@ -1,45 +1,64 @@
-from spaceone.core.error import *
+from spaceone.core.error import ERROR_UNKNOWN
 
 
-class ERROR_EMPTY_BILLED_DATE(ERROR_UNKNOWN):
+class ErrorEmptyBilledDate(ERROR_UNKNOWN):
     _message = "Must have billed_date field or year, month fields.: {result}"
 
 
-class ERROR_EMPTY_FILE(ERROR_UNKNOWN):
+class ErrorEmptyFile(ERROR_UNKNOWN):
     _message = "File is empty or contains no data: {file_path}. Please check if the source file exists and contains valid data. This may be due to an empty blob, failed download, corrupted file, or attempting to download a directory-like blob."
 
 
-class ERROR_NO_DATA_ROWS(ERROR_UNKNOWN):
+class ErrorNoDataRows(ERROR_UNKNOWN):
     _message = "File has no data rows: {file_path}"
 
 
-class ERROR_EMPTY_HEADER(ERROR_UNKNOWN):
+class ErrorEmptyHeader(ERROR_UNKNOWN):
     _message = "Empty header line: {file_path}"
 
 
-class ERROR_NO_DATA_FOUND(ERROR_UNKNOWN):
+class ErrorNoDataFound(ERROR_UNKNOWN):
     _message = "No data found in CSV file: {file_path}"
 
 
-class ERROR_NO_COLUMNS(ERROR_UNKNOWN):
+class ErrorNoColumns(ERROR_UNKNOWN):
     _message = "No columns to parse from file: {file_path}"
 
 
-class ERROR_CSV_PARSING(ERROR_UNKNOWN):
+class ErrorCsvParsing(ERROR_UNKNOWN):
     _message = "CSV parsing error: {error_message}"
 
 
-class ERROR_FILE_DOWNLOAD_FAILED(ERROR_UNKNOWN):
+class ErrorFileDownloadFailed(ERROR_UNKNOWN):
     _message = "Failed to download file: {file_path}. Please check the file URL and network connectivity."
 
 
-class ERROR_INVALID_FILE_FORMAT(ERROR_UNKNOWN):
+class ErrorInvalidFileFormat(ERROR_UNKNOWN):
     _message = "Invalid file format: {file_path}. Expected CSV or JSON format."
 
 
-class ERROR_JSON_PARSING(ERROR_UNKNOWN):
+class ErrorJsonParsing(ERROR_UNKNOWN):
     _message = "JSON parsing error: {error_message}"
 
 
-class ERROR_DIRECTORY_BLOB(ERROR_UNKNOWN):
+class ErrorDirectoryBlob(ERROR_UNKNOWN):
     _message = "Attempted to download a directory-like blob: {file_path}. Please ensure you are targeting actual files, not directories."
+
+
+class ErrorRequiredParameter(ERROR_UNKNOWN):
+    _message = "Required parameter is missing: {key}"
+
+
+# Error constants for import
+ERROR_EMPTY_BILLED_DATE = ErrorEmptyBilledDate
+ERROR_EMPTY_FILE = ErrorEmptyFile
+ERROR_NO_DATA_ROWS = ErrorNoDataRows
+ERROR_EMPTY_HEADER = ErrorEmptyHeader
+ERROR_NO_DATA_FOUND = ErrorNoDataFound
+ERROR_NO_COLUMNS = ErrorNoColumns
+ERROR_CSV_PARSING = ErrorCsvParsing
+ERROR_FILE_DOWNLOAD_FAILED = ErrorFileDownloadFailed
+ERROR_INVALID_FILE_FORMAT = ErrorInvalidFileFormat
+ERROR_JSON_PARSING = ErrorJsonParsing
+ERROR_DIRECTORY_BLOB = ErrorDirectoryBlob
+ERROR_REQUIRED_PARAMETER = ErrorRequiredParameter

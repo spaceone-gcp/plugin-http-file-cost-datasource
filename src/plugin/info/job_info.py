@@ -1,18 +1,18 @@
 import functools
+
 from spaceone.api.cost_analysis.plugin import job_pb2
 from spaceone.core.pygrpc.message_type import *
-from spaceone.core import utils
 
-__all__ = ["TaskInfo", "TasksInfo"]
+__all__ = ["task_info", "tasks_info", "changed_info"]
 
 
-def TaskInfo(task_data):
+def task_info(task_data):
     info = {"task_options": change_struct_type(task_data["task_options"])}
 
     return job_pb2.TaskInfo(**info)
 
 
-def ChangedInfo(changed_data):
+def changed_info(changed_data):
     info = {"start": changed_data["start"]}
 
     if "end" in changed_data:
@@ -21,11 +21,11 @@ def ChangedInfo(changed_data):
     return job_pb2.ChangedInfo(**info)
 
 
-def TasksInfo(result, **kwargs):
+def tasks_info(result, **kwargs):
     tasks_data = result.get("tasks", [])
     changed_data = result.get("changed", [])
 
     return job_pb2.TasksInfo(
-        tasks=list(map(functools.partial(TaskInfo, **kwargs), tasks_data)),
-        changed=list(map(functools.partial(ChangedInfo, **kwargs), changed_data)),
+        tasks=list(map(functools.partial(task_info, **kwargs), tasks_data)),
+        changed=list(map(functools.partial(changed_info, **kwargs), changed_data)),
     )

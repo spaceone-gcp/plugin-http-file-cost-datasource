@@ -14,9 +14,9 @@
 #   limitations under the License.
 
 
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
-with open("VERSION", "r") as f:
+with open("VERSION") as f:
     VERSION = f.read().strip()
     f.close()
 
@@ -32,6 +32,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "spaceone-core",
+        "spaceone-cost-analysis",
         "schematics",
         "requests",
         "pandas",

@@ -1,7 +1,8 @@
 from spaceone.api.cost_analysis.plugin import job_pb2, job_pb2_grpc
 from spaceone.core.pygrpc import BaseAPI
+
+from plugin.info.job_info import tasks_info
 from plugin.service.job_service import JobService
-from plugin.info.job_info import TasksInfo
 
 
 class Job(BaseAPI, job_pb2_grpc.JobServicer):
@@ -12,4 +13,4 @@ class Job(BaseAPI, job_pb2_grpc.JobServicer):
         params, metadata = self.parse_request(request, context)
 
         with self.locator.get_service(JobService, metadata) as job_service:
-            return self.locator.get_info(TasksInfo, job_service.get_tasks(params))
+            return self.locator.get_info(tasks_info, job_service.get_tasks(params))
