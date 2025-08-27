@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Dict, Generator, List
 
 import chardet
@@ -51,6 +52,45 @@ PARQUET_EXTENSIONS = [
 ]  # Parquet 파일 확장자
 
 _LOGGER = logging.getLogger(__name__)  # 로거 설정
+
+
+def convert_numpy_types(obj):
+    """
+    numpy 및 pandas 타입을 Python 기본 타입으로 변환하는 재귀 함수
+
+    Args:
+        obj: 변환할 객체 (dict, list, numpy/pandas 타입 등)
+
+    Returns:
+        Python 기본 타입으로 변환된 객체
+    """
+    if isinstance(obj, np.ndarray):
+        # numpy 배열을 리스트로 변환
+        return [convert_numpy_types(item) for item in obj.tolist()]
+    elif isinstance(obj, (np.integer, np.floating)):
+        # numpy 숫자 타입을 Python 기본 타입으로 변환
+        return obj.item()
+    elif isinstance(obj, np.bool_):
+        # numpy bool을 Python bool로 변환
+        return bool(obj)
+    elif isinstance(obj, pd.Timestamp):
+        # pandas Timestamp를 문자열로 변환
+        return str(obj)
+    elif hasattr(obj, "to_pydatetime"):
+        # pandas datetime 객체를 Python datetime으로 변환 후 문자열로 변환
+        return str(obj.to_pydatetime())
+    elif isinstance(obj, dict):
+        # 딕셔너리의 모든 값에 대해 재귀적으로 변환
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        # 리스트의 모든 요소에 대해 재귀적으로 변환
+        return [convert_numpy_types(item) for item in obj]
+    elif pd.isna(obj):
+        # pandas NaN을 None으로 변환
+        return None
+    else:
+        # 기타 타입은 그대로 반환
+        return obj
 
 
 class BaseFileConnector(BaseConnector):
@@ -119,7 +159,9 @@ class BaseFileConnector(BaseConnector):
         # Content-Type 헤더 확인 (URL인 경우)
         if file_path.startswith(("http://", "https://")):
             try:
-                response = requests.head(file_path, timeout=10)  # HEAD 요청 실행
+                response = requests.head(
+                    file_path, timeout=None
+                )  # HEAD 요청 실행 (timeout 제거)
                 content_type = response.headers.get("content-type", "").lower()
                 if (
                     "application/json" in content_type or "text/json" in content_type
@@ -131,7 +173,9 @@ class BaseFileConnector(BaseConnector):
         # 파일 내용 확인
         try:
             if file_path.startswith(("http://", "https://")):
-                response = requests.get(file_path, timeout=10)  # GET 요청 실행
+                response = requests.get(
+                    file_path, timeout=None
+                )  # GET 요청 실행 (timeout 제거)
                 content = response.content.decode("utf-8", errors="ignore").strip()
             else:
                 with open(file_path, encoding="utf-8") as f:  # 파일 읽기
@@ -163,7 +207,9 @@ class BaseFileConnector(BaseConnector):
         # Content-Type 헤더 확인 (URL인 경우)
         if file_path.startswith(("http://", "https://")):
             try:
-                response = requests.head(file_path, timeout=10)  # HEAD 요청 실행
+                response = requests.head(
+                    file_path, timeout=None
+                )  # HEAD 요청 실행 (timeout 제거)
                 content_type = response.headers.get(
                     "content-type", ""
                 ).lower()  # Content-Type 헤더 확인
@@ -250,9 +296,46 @@ class BaseFileConnector(BaseConnector):
             ERROR_CSV_PARSING: CSV 파싱 오류
         """
         try:
-            # 파일 내용 읽기
-            with open(file_path, encoding="utf-8") as f:
-                content = f.read().strip()  # 파일 내용 읽기
+            # 인코딩 감지 시도
+            detected_encoding = "utf-8"
+            try:
+                import chardet
+
+                with open(file_path, "rb") as f:
+                    raw_data = f.read(1024)
+                detected = chardet.detect(raw_data)
+                if detected.get("encoding"):
+                    detected_encoding = detected["encoding"]
+                    _LOGGER.debug(
+                        f"Detected encoding for CSV file {file_path}: {detected_encoding}"
+                    )
+            except Exception:
+                pass  # 감지 실패시 utf-8 사용
+
+            # 파일 내용 읽기 (여러 인코딩 시도)
+            content = None
+
+            for encoding in [
+                detected_encoding,
+                "utf-8",
+                "latin-1",
+                "cp1252",
+                "iso-8859-1",
+            ]:
+                try:
+                    with open(file_path, encoding=encoding) as f:
+                        content = f.read().strip()  # 파일 내용 읽기
+
+                    _LOGGER.debug(
+                        f"Successfully read CSV file with {encoding} encoding: {file_path}"
+                    )
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if content is None:
+                _LOGGER.error(f"Failed to read CSV file with any encoding: {file_path}")
+                raise ERROR_CSV_PARSING(message=f"Could not decode file: {file_path}")
 
             if not content:  # 파일 내용이 비어있는 경우
                 _LOGGER.error(f"File is empty: {file_path}")
@@ -297,6 +380,13 @@ class BaseFileConnector(BaseConnector):
             df = df.replace({np.nan: None})  # NaN 값을 None으로 변환
             costs_data = df.to_dict("records")  # DataFrame을 딕셔너리 리스트로 변환
 
+            # numpy 타입을 Python 기본 타입으로 변환
+            costs_data = [convert_numpy_types(record) for record in costs_data]
+
+            # 🔥 최종 보안: 모든 비딕셔너리 데이터 완전 제거
+            # 딕셔너리가 아닌 데이터 필터링
+            costs_data = [record for record in costs_data if isinstance(record, dict)]
+
             _LOGGER.info(
                 f"Successfully parsed {len(costs_data)} records from {file_path}"
             )  # 파싱된 데이터 수 로깅
@@ -335,36 +425,209 @@ class BaseFileConnector(BaseConnector):
 
             # gzip 압축 파일 처리
             if file_path.lower().endswith(".json.gz"):
-                _LOGGER.debug(
-                    f"Processing gzipped JSON file: {file_path}"
-                )  # gzip 압축 파일 처리 로깅
-                with gzip.open(
-                    file_path, "rt", encoding="utf-8"
-                ) as f:  # gzip 압축 파일 읽기
-                    for line_num, line in enumerate(f, 1):  # 줄 번호 및 줄 내용 반복
-                        line = line.strip()  # 줄 내용 제거 공백
-                        if line:  # 줄 내용이 비어있지 않은 경우
-                            try:
-                                record = json.loads(line)  # JSON 파싱
-                                costs_data.append(record)  # 비용 데이터 리스트에 추가
-                            except json.JSONDecodeError as e:
-                                _LOGGER.warning(
-                                    f"Failed to parse JSON at line {line_num}: {e}"
-                                )  # JSON 파싱 실패 로깅
-                                continue
+                start_time = time.time()
+                line_count = 0
+                processed_count = 0
+                file_size = os.path.getsize(file_path)
+
+                _LOGGER.info(
+                    f"Processing gzipped JSON file: {file_path} (Compressed size: {file_size / 1024 / 1024:.2f} MB)"
+                )
+
+                try:
+                    with gzip.open(
+                        file_path, "rt", encoding="utf-8"
+                    ) as f:  # gzip 압축 파일 읽기
+                        for line_num, line in enumerate(
+                            f, 1
+                        ):  # 줄 번호 및 줄 내용 반복
+                            line_count += 1
+                            line = line.strip()  # 줄 내용 제거 공백
+
+                            # 대용량 파일 진행 상황 로깅 (5000줄마다)
+                            if line_count % 5000 == 0:
+                                elapsed = time.time() - start_time
+                                _LOGGER.info(
+                                    f"Processing line {line_count}, parsed {processed_count} records ({elapsed:.1f}s)"
+                                )
+
+                            if line:  # 줄 내용이 비어있지 않은 경우
+                                try:
+                                    record = json.loads(line)  # JSON 파싱
+                                    # 딕셔너리 타입 검증 강화
+                                    if isinstance(record, dict):
+                                        costs_data.append(
+                                            record
+                                        )  # 비용 데이터 리스트에 추가
+                                        processed_count += 1
+                                    else:
+                                        # 모든 비딕셔너리 데이터를 자세히 로깅
+                                        _LOGGER.error(
+                                            f"CRITICAL: Found non-dict data in JSON at line {line_count}: {type(record).__name__} = {repr(record)[:200]}"
+                                        )
+                                        # 통계 카운트 (모든 비딕셔너리 데이터)
+                                        if line_count % 1000 == 0:
+                                            _LOGGER.info(
+                                                f"Found {line_count - processed_count} non-dict records so far"
+                                            )
+                                except json.JSONDecodeError as e:
+                                    if line_count <= 10:  # 처음 10줄만 경고 표시
+                                        _LOGGER.warning(
+                                            f"Failed to parse JSON at line {line_count}: {e}"
+                                        )  # JSON 파싱 실패 로깅
+                                    continue
+
+                    elapsed_time = time.time() - start_time
+                    _LOGGER.info(
+                        f"Completed gzip processing {processed_count} records from {line_count} lines ({elapsed_time:.2f}s)"
+                    )
+
+                except UnicodeDecodeError as e:
+                    _LOGGER.error(
+                        f"UTF-8 decode error for gzipped JSON file {file_path}: {e}"
+                    )
+                    # gzip 파일도 다른 인코딩 시도
+                    for fallback_encoding in ["latin-1", "cp1252", "iso-8859-1"]:
+                        try:
+                            _LOGGER.debug(
+                                f"Trying fallback encoding {fallback_encoding} for gzipped file {file_path}"
+                            )
+                            with gzip.open(
+                                file_path, "rt", encoding=fallback_encoding
+                            ) as f:
+                                costs_data = []
+                                for line_num, line in enumerate(f, 1):
+                                    line = line.strip()
+                                    if line:
+                                        try:
+                                            record = json.loads(line)
+                                            # 딕셔너리 타입 검증 추가
+                                            if isinstance(record, dict):
+                                                costs_data.append(record)
+                                            else:
+                                                _LOGGER.error(
+                                                    f"CRITICAL: Non-dict in gzipped file at line {line_num}: {type(record).__name__} = {repr(record)[:200]}"
+                                                )
+                                        except json.JSONDecodeError:
+                                            continue
+                            _LOGGER.info(
+                                f"Successfully read gzipped JSON file with {fallback_encoding} encoding: {file_path}"
+                            )
+                            break
+                        except Exception:
+                            continue
+                    else:
+                        raise e
             else:  # gzip 압축 파일이 아닌 경우
-                with open(file_path, encoding="utf-8") as f:  # 파일 읽기
-                    for line_num, line in enumerate(f, 1):
-                        line = line.strip()  # 줄 내용 제거 공백
-                        if line:  # 줄 내용이 비어있지 않은 경우
-                            try:
-                                record = json.loads(line)  # JSON 파싱
-                                costs_data.append(record)  # 비용 데이터 리스트에 추가
-                            except json.JSONDecodeError as e:
-                                _LOGGER.warning(
-                                    f"Failed to parse JSON at line {line_num}: {e}"
-                                )  # JSON 파싱 실패 로깅
-                                continue
+                # 인코딩 감지 시도
+                detected_encoding = "utf-8"
+                try:
+                    import chardet
+
+                    with open(file_path, "rb") as f:
+                        raw_data = f.read(1024)
+                    detected = chardet.detect(raw_data)
+                    if detected.get("encoding"):
+                        detected_encoding = detected["encoding"]
+                        _LOGGER.debug(
+                            f"Detected encoding for JSON file {file_path}: {detected_encoding}"
+                        )
+                except Exception:
+                    pass  # 감지 실패시 utf-8 사용
+
+                try:
+                    start_time = time.time()
+                    line_count = 0
+                    processed_count = 0
+                    file_size = os.path.getsize(file_path)
+
+                    _LOGGER.info(
+                        f"Processing JSON file: {file_path} (Size: {file_size / 1024 / 1024:.2f} MB)"
+                    )
+
+                    with open(
+                        file_path, encoding=detected_encoding
+                    ) as f:  # 감지된 인코딩으로 파일 읽기
+                        for line_num, line in enumerate(f, 1):
+                            line_count += 1
+                            line = line.strip()  # 줄 내용 제거 공백
+
+                            # 대용량 파일 진행 상황 로깅 (5000줄마다)
+                            if line_count % 5000 == 0:
+                                elapsed = time.time() - start_time
+                                _LOGGER.info(
+                                    f"Processing line {line_count}, parsed {processed_count} records ({elapsed:.1f}s)"
+                                )
+
+                            if line:  # 줄 내용이 비어있지 않은 경우
+                                try:
+                                    record = json.loads(line)  # JSON 파싱
+                                    # 딕셔너리 타입 검증 강화
+                                    if isinstance(record, dict):
+                                        costs_data.append(
+                                            record
+                                        )  # 비용 데이터 리스트에 추가
+                                        processed_count += 1
+                                    else:
+                                        # 모든 비딕셔너리 데이터를 자세히 로깅
+                                        _LOGGER.error(
+                                            f"CRITICAL: Found non-dict data in JSON at line {line_count}: {type(record).__name__} = {repr(record)[:200]}"
+                                        )
+                                        # 통계 카운트 (모든 비딕셔너리 데이터)
+                                        if line_count % 1000 == 0:
+                                            _LOGGER.info(
+                                                f"Found {line_count - processed_count} non-dict records so far"
+                                            )
+                                except json.JSONDecodeError as e:
+                                    if line_count <= 10:  # 처음 10줄만 경고 표시
+                                        _LOGGER.warning(
+                                            f"Failed to parse JSON at line {line_count}: {e}"
+                                        )  # JSON 파싱 실패 로깅
+                                    continue
+
+                    elapsed_time = time.time() - start_time
+                    _LOGGER.info(
+                        f"Completed processing {processed_count} records from {line_count} lines ({elapsed_time:.2f}s)"
+                    )
+                except UnicodeDecodeError as e:
+                    _LOGGER.error(f"UTF-8 decode error for JSON file {file_path}: {e}")
+                    # 폴백 인코딩들 시도
+                    for fallback_encoding in ["latin-1", "cp1252", "iso-8859-1"]:
+                        try:
+                            _LOGGER.debug(
+                                f"Trying fallback encoding {fallback_encoding} for {file_path}"
+                            )
+                            with open(file_path, encoding=fallback_encoding) as f:
+                                for line_num, line in enumerate(f, 1):
+                                    line = line.strip()
+                                    if line:
+                                        try:
+                                            record = json.loads(line)
+                                            costs_data.append(record)
+                                        except json.JSONDecodeError as e:
+                                            _LOGGER.warning(
+                                                f"Failed to parse JSON at line {line_num} with {fallback_encoding}: {e}"
+                                            )
+                                            continue
+                            _LOGGER.info(
+                                f"Successfully read JSON file with {fallback_encoding} encoding: {file_path}"
+                            )
+                            break  # 성공한 인코딩이 있으면 중단
+                        except Exception:
+                            continue  # 다음 인코딩 시도
+                    else:
+                        # 모든 인코딩이 실패한 경우
+                        _LOGGER.error(
+                            f"All encoding attempts failed for JSON file: {file_path}"
+                        )
+                        raise e  # 원래 오류 다시 발생
+
+            # numpy 타입을 Python 기본 타입으로 변환 (안전성을 위해)
+            costs_data = [convert_numpy_types(record) for record in costs_data]
+
+            # 🔥 최종 보안: 모든 비딕셔너리 데이터 완전 제거
+            # 딕셔너리가 아닌 데이터 필터링
+            costs_data = [record for record in costs_data if isinstance(record, dict)]
 
             _LOGGER.info(
                 f"Successfully parsed {len(costs_data)} records from {file_path}"
@@ -426,6 +689,13 @@ class BaseFileConnector(BaseConnector):
             df = df.replace({np.nan: None})  # NaN 값을 None으로 변환
             costs_data = df.to_dict("records")  # DataFrame을 딕셔너리 리스트로 변환
 
+            # numpy 타입을 Python 기본 타입으로 변환
+            costs_data = [convert_numpy_types(record) for record in costs_data]
+
+            # 🔥 최종 보안: 모든 비딕셔너리 데이터 완전 제거
+            # 딕셔너리가 아닌 데이터 필터링
+            costs_data = [record for record in costs_data if isinstance(record, dict)]
+
             _LOGGER.info(
                 f"Successfully parsed {len(costs_data)} records from {file_path}"
             )  # 파싱된 데이터 수 로깅
@@ -440,7 +710,7 @@ class BaseFileConnector(BaseConnector):
     @staticmethod
     def parse_cost_file(file_path: str) -> List[Dict[str, Any]]:
         """
-        파일 형식을 자동 감지하여 파싱
+        파일 형식을 자동 감지하여 파싱 (강화된 인코딩 및 파일 타입 감지)
 
         Args:
             file_path: 파일 경로
@@ -452,38 +722,168 @@ class BaseFileConnector(BaseConnector):
             Exception: 파일 읽기 실패 시
         """
         try:
-            file_extension = os.path.splitext(file_path)[1].lower()  # 파일 확장자 확인
+            _LOGGER.info(f"Starting enhanced file parsing: {file_path}")
 
-            # Parquet 파일 처리
+            # 1단계: 바이너리 매직 넘버로 파일 타입 감지
+            try:
+                with open(file_path, "rb") as f:
+                    header = f.read(16)
+
+                _LOGGER.debug(f"File header bytes: {header[:8].hex()}")
+
+                # Parquet 매직 넘버 확인 (PAR1)
+                if header.startswith(b"PAR1") or b"PAR1" in header[:8]:
+                    _LOGGER.info(f"Detected Parquet file by magic number: {file_path}")
+                    return BaseFileConnector.read_parquet_file(file_path)
+
+                # gzip 매직 넘버 확인 (1f 8b)
+                if header.startswith(b"\x1f\x8b"):
+                    _LOGGER.info(f"Detected gzip compressed file: {file_path}")
+                    return BaseFileConnector._handle_gzip_compressed_file(file_path)
+
+            except Exception as header_error:
+                _LOGGER.warning(f"Failed to read file header: {header_error}")
+
+            # 2단계: 파일 확장자 기반 판별
+            file_extension = os.path.splitext(file_path)[1].lower()
+
+            # Parquet 확장자 확인
             if file_extension == ".parquet" or any(
                 file_path.lower().endswith(ext) for ext in PARQUET_EXTENSIONS
-            ):  # Parquet 파일 처리
-                return BaseFileConnector.read_parquet_file(
-                    file_path
-                )  # Parquet 파일 읽기
+            ):
+                _LOGGER.info(f"Processing as Parquet by extension: {file_path}")
+                return BaseFileConnector.read_parquet_file(file_path)
 
-            # JSON 파일 처리
-            elif file_extension in [".json", ".json.gz"]:  # JSON 파일 처리
-                return BaseFileConnector.read_json_file(file_path)  # JSON 파일 읽기
+            # JSON 확장자 확인
+            if file_extension in [".json", ".json.gz"]:
+                _LOGGER.info(f"Processing as JSON by extension: {file_path}")
+                return BaseFileConnector.read_json_file(file_path)
 
-            # CSV 파일 처리
-            else:
-                # 첫 번째 줄을 읽어서 JSON 형식인지 확인
-                with open(file_path, encoding="utf-8") as f:  # 파일 읽기
-                    first_line = f.readline().strip()  # 첫 번째 줄 읽기
-
-                if (
-                    first_line.startswith("{") or '"billing_account_id"' in first_line
-                ):  # JSON 형식 확인
-                    return BaseFileConnector.read_json_file(file_path)  # JSON 파일 읽기
-                else:
-                    return BaseFileConnector.read_csv_file(file_path)  # CSV 파일 읽기
+            # 3단계: 텍스트 파일 내용 감지 (안전한 인코딩 처리)
+            return BaseFileConnector._detect_text_file_type(file_path)
 
         except Exception as e:
-            _LOGGER.error(
-                f"File parsing error: {e}", exc_info=True
-            )  # 파일 파싱 오류 로깅
-            raise e  # 오류 발생
+            _LOGGER.error(f"File parsing error for {file_path}: {e}", exc_info=True)
+            # 개별 파일 오류는 전체 처리를 중단하지 않음
+            _LOGGER.warning(f"Skipping problematic file: {file_path}")
+            return []
+
+    @staticmethod
+    def _handle_gzip_compressed_file(file_path: str) -> List[Dict[str, Any]]:
+        """
+        gzip 압축 파일 처리
+
+        Args:
+            file_path: gzip 파일 경로
+
+        Returns:
+            List[Dict[str, Any]]: 파싱된 데이터 리스트
+        """
+        import gzip
+        import tempfile
+
+        try:
+            # gzip 파일 압축 해제
+            with gzip.open(file_path, "rb") as gz_file:
+                decompressed_data = gz_file.read()
+
+            # 임시 파일에 압축 해제된 데이터 저장
+            with tempfile.NamedTemporaryFile(
+                mode="wb", delete=False, suffix=".tmp"
+            ) as temp_file:
+                temp_file.write(decompressed_data)
+                temp_path = temp_file.name
+
+            try:
+                # 압축 해제된 파일을 다시 파싱
+                _LOGGER.info(f"Processing decompressed file: {file_path}")
+                result = BaseFileConnector.parse_cost_file(temp_path)
+                return result
+            finally:
+                # 임시 파일 정리
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            _LOGGER.error(f"Failed to handle gzip file {file_path}: {e}")
+            return []
+
+    @staticmethod
+    def _detect_text_file_type(file_path: str) -> List[Dict[str, Any]]:
+        """
+        텍스트 파일 타입 감지 및 처리 (강력한 인코딩 지원)
+
+        Args:
+            file_path: 텍스트 파일 경로
+
+        Returns:
+            List[Dict[str, Any]]: 파싱된 데이터 리스트
+        """
+        try:
+            # 인코딩 감지
+            import chardet
+
+            with open(file_path, "rb") as f:
+                raw_sample = f.read(2048)  # 더 큰 샘플로 정확한 감지
+
+            detected = chardet.detect(raw_sample)
+            primary_encoding = detected.get("encoding", "utf-8")
+            confidence = detected.get("confidence", 0)
+
+            _LOGGER.debug(
+                f"Detected encoding: {primary_encoding} (confidence: {confidence})"
+            )
+
+            # 시도할 인코딩 리스트 (감지된 인코딩을 우선순위로)
+            encodings_to_try = [
+                primary_encoding,
+                "utf-8",
+                "latin-1",
+                "cp1252",
+                "iso-8859-1",
+            ]
+
+            # 중복 제거
+            encodings_to_try = list(dict.fromkeys(filter(None, encodings_to_try)))
+
+            first_line = None
+
+            # 각 인코딩으로 파일 읽기 시도
+            for encoding in encodings_to_try:
+                try:
+                    with open(file_path, encoding=encoding) as f:
+                        first_line = f.readline().strip()
+                    _LOGGER.debug(f"Successfully read with {encoding}: {file_path}")
+                    break
+                except UnicodeDecodeError:
+                    _LOGGER.debug(f"Failed to read with {encoding}: {file_path}")
+                    continue
+
+            if first_line is None:
+                _LOGGER.error(f"Could not read file with any encoding: {file_path}")
+                # 마지막 시도: Parquet으로 처리
+                _LOGGER.info(f"Attempting Parquet parsing as fallback: {file_path}")
+                return BaseFileConnector.read_parquet_file(file_path)
+
+            # 파일 내용 기반 타입 결정
+            if first_line.startswith("{") or '"billing_account_id"' in first_line:
+                _LOGGER.info(f"Detected JSON content: {file_path}")
+                return BaseFileConnector.read_json_file(file_path)
+            else:
+                _LOGGER.info(f"Detected CSV content: {file_path}")
+                return BaseFileConnector.read_csv_file(file_path)
+
+        except Exception as e:
+            _LOGGER.error(f"Text file detection failed for {file_path}: {e}")
+            # 최후의 수단: Parquet 시도
+            try:
+                _LOGGER.info(f"Final fallback to Parquet: {file_path}")
+                return BaseFileConnector.read_parquet_file(file_path)
+            except Exception:
+                _LOGGER.error(f"All parsing attempts failed for: {file_path}")
+                return []
 
     @staticmethod
     def generate_safe_filename(original_name: str) -> str:
@@ -564,13 +964,13 @@ class BaseFileConnector(BaseConnector):
             )  # 임시 파일 삭제 실패 로깅
 
     @staticmethod
-    def download_file_from_url(url: str, timeout: int = 30) -> bytes:
+    def download_file_from_url(url: str, timeout: int = None) -> bytes:
         """
         URL에서 파일을 다운로드
 
         Args:
             url: 파일 URL
-            timeout: 타임아웃 시간 (초)
+            timeout: 타임아웃 시간 (초, None이면 무제한)
 
         Returns:
             bytes: 다운로드된 파일 내용
@@ -580,7 +980,9 @@ class BaseFileConnector(BaseConnector):
             ERROR_EMPTY_FILE: 파일이 비어있는 경우
         """
         try:
-            response = requests.get(url, timeout=timeout)  # GET 요청 실행
+            response = requests.get(
+                url, timeout=timeout
+            )  # GET 요청 실행 (timeout 제거)
             response.raise_for_status()  # 요청 상태 확인
 
             content_length = len(response.content)  # 파일 내용 길이 확인
@@ -605,3 +1007,59 @@ class BaseFileConnector(BaseConnector):
             raise ERROR_FILE_DOWNLOAD_FAILED(
                 file_path=url
             ) from e  # 파일 다운로드 실패 오류 발생
+
+    def _ensure_only_dict_records_final(
+        self, costs_data: list, source_file: str
+    ) -> list:
+        """
+        🔥 최종 보안: BaseFileConnector에서 모든 비딕셔너리 데이터를 완전 제거
+
+        이 함수는 모든 파일 파싱 메서드의 최종 단계에서 실행되어
+        'int' object has no attribute 'keys' 오류를 완전히 방지합니다.
+
+        Args:
+            costs_data (list): 파싱된 원본 데이터 리스트
+            source_file (str): 소스 파일명 (로깅용)
+
+        Returns:
+            list: 딕셔너리만 포함된 완전 정제된 데이터 리스트
+        """
+        if not costs_data:
+            return []
+
+        original_count = len(costs_data)
+        filtered_data = []
+        non_dict_count = 0
+        non_dict_types = {}
+
+        for idx, record in enumerate(costs_data):
+            if isinstance(record, dict) and record:  # 딕셔너리이며 비어있지 않은 경우
+                filtered_data.append(record)
+            else:
+                # 비딕셔너리 또는 빈 딕셔너리는 완전 차단
+                non_dict_count += 1
+                type_name = type(record).__name__ if record else "empty_dict"
+                non_dict_types[type_name] = non_dict_types.get(type_name, 0) + 1
+
+                # 상세 로깅 (처음 3개만)
+                if non_dict_count <= 3:
+                    _LOGGER.error(
+                        f"🛡️ FINAL FILTER: Removed non-dict in {source_file} at index {idx}: "
+                        f"{type_name} = {repr(record)[:100]}"
+                    )
+
+        # 정제 결과 로깅
+        if non_dict_count > 0:
+            _LOGGER.warning(
+                f"🛡️ FINAL SECURITY FILTER applied to {source_file}: "
+                f"Removed {non_dict_count}/{original_count} invalid records. "
+                f"Types removed: {non_dict_types}"
+            )
+
+        filtered_count = len(filtered_data)
+        _LOGGER.info(
+            f"🛡️ Final security check complete for {source_file}: "
+            f"{filtered_count}/{original_count} valid dict records secured"
+        )
+
+        return filtered_data

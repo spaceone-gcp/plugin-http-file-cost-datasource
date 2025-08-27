@@ -2,6 +2,7 @@
 
 * Plugin for collecting cost data from **CSV, JSON, and Parquet files**
 * Plugin for collecting cost data from **HTTP files and Google Cloud Storage**
+* Plugin for collecting cost data from **Google Cloud Billing Export**
 * Plugin for retrieving **linked accounts information**
 
 ---
@@ -14,6 +15,7 @@ The files must be in the format specified in the [2) File format](#2-file-format
 The plugin supports multiple data sources:
 - **HTTP Files**: CSV, JSON, and Parquet files located on web servers
 - **Google Cloud Storage**: Files stored in Google Cloud Storage buckets
+- **Google Cloud Billing Export**: Standard usage cost data exported from Google Cloud Billing
 - **Linked Accounts**: Retrieval of connected account information for cost analysis
 
 The CSV file must be located on the web server,  
@@ -117,6 +119,22 @@ The plugin has been enhanced with better file handling capabilities:
 * region_code
 * product
 
+### Google Cloud Billing Export Fields
+
+For Google Cloud Billing Export data, the following additional fields are supported:
+
+* **billing_account_id**: Cloud Billing account ID
+* **service.id**, **service.description**: Service information
+* **sku.id**, **sku.description**: SKU information
+* **project.id**, **project.name**: Project information
+* **location.location**, **location.region**, **location.zone**: Location information
+* **usage_start_time**, **usage_end_time**: Usage time information
+* **invoice.month**: Invoice month (YYYYMM format)
+* **credits**: Credit information
+* **tags**, **labels**: Tags and labels information
+
+For detailed field mapping and configuration, see [Google Cloud Billing Integration Guide](docs/ko/Google%20Cloud%20Billing%20Integration.md).
+
 ## 3) Options of plugin
 
 * The following options are available for the plugin.
@@ -194,6 +212,31 @@ options:
 options:
   default_vars:
     currency: KRW
+```
+
+**Google Cloud Storage (optional)**
+
+* For Google Cloud Storage data sources, specify the bucket name and provide Service Account credentials.
+* See [Google Cloud Billing Integration Guide](docs/ko/Google%20Cloud%20Billing%20Integration.md) for detailed configuration.
+
+```yaml
+---
+options:
+  bucket_name: "your-billing-export-bucket"
+  provider: "google_cloud"
+  field_mapper:
+    cost: "cost"
+    billed_date: "usage_start_time"
+    additional_info:
+      billing_account_id: "billing_account_id"
+      service_id: "service.id"
+      project_id: "project.id"
+
+secret_data:
+  type: "service_account"
+  project_id: "your-project-id"
+  private_key: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+  client_email: "your-service-account@your-project.iam.gserviceaccount.com"
 ```
 
 ## 4) How to use (Deprecated)

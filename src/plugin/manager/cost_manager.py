@@ -6,6 +6,7 @@ from typing import Any, Dict, Generator, List, Optional
 from dateutil.parser import parse
 from spaceone.core.manager import BaseManager
 
+from plugin.connector.base_file_connector import convert_numpy_types
 from plugin.connector.google_storage_collector import (
     GoogleStorageConnector,
 )
@@ -35,6 +36,14 @@ class CostManagerConfig:
     CSV_PROVIDER = "csv"  # CSV 파일 제공자
     DATE_FORMAT = "%Y-%m-%d"  # 날짜 형식
     ACCOUNT_ID_PADDING_LENGTH = 12  # 계정 ID 패딩 길이
+
+    # Google Cloud Billing 전용 상수
+    GCP_PROVIDER = "gcp"  # Google Cloud 제공자
+    GCP_BILLING_PROVIDER = "google_cloud"  # Google Cloud Billing 제공자
+
+    # Google Cloud Billing 전용 상수
+    GCP_PROVIDER = "gcp"  # Google Cloud 제공자
+    GCP_BILLING_PROVIDER = "google_cloud"  # Google Cloud Billing 제공자
 
 
 class CostManager(BaseManager):
@@ -125,25 +134,40 @@ class CostManager(BaseManager):
             self.type_mapper = options["type_mapper"]
 
     def _validate_field_mapper_completeness(self) -> None:
-        """field_mapper 설정에서 필수 필드 매핑이 모두 포함되어 있는지 검증합니다."""
-        if not self.field_mapper:
-            _LOGGER.warning(
-                "field_mapper가 설정되지 않았습니다. 원본 데이터에 필수 필드가 직접 포함되어 있어야 합니다."
-            )
+        """
+        field_mapper 설정의 완전성을 검증합니다.
+
+        필수 필드들이 매핑되어 있는지 확인하고, 누락된 경우 경고를 출력합니다.
+        Google Cloud Billing 데이터의 경우 자동으로 처리되므로 경고를 완화합니다.
+        """
+        if not self.field_mapper:  # field_mapper 설정이 없는 경우
             return
 
+        required_fields = ["cost", "billed_date"]  # 필수 필드 목록
         missing_fields = []  # 누락된 필드 목록
-        for required_field in CostManagerConfig.REQUIRED_FIELDS:  # 필수 필드 순회
+
+        for required_field in required_fields:  # 필수 필드 순회
             if (
                 required_field not in self.field_mapper
             ):  # 필수 필드가 매핑되지 않은 경우
                 missing_fields.append(required_field)  # 누락된 필드 추가
 
         if missing_fields:  # 누락된 필드가 있는 경우
-            _LOGGER.warning(
-                f"field_mapper에 다음 필수 필드 매핑이 누락되었습니다: {missing_fields}. "
-                f"원본 데이터에 해당 필드가 직접 포함되어 있거나 default_vars로 설정되어 있는지 확인하세요."
+            # Google Cloud Billing 데이터인지 확인
+            is_gcp_billing = (
+                self.field_mapper.get("billing_account_id")
+                or self.field_mapper.get("service_id")
+                or self.field_mapper.get("project_id")
             )
+
+            if is_gcp_billing:
+                _LOGGER.debug(
+                    f"Google Cloud Billing 데이터 - 자동 필드 매핑 사용: {missing_fields}"
+                )  # 디버그 메시지로 변경
+            else:
+                _LOGGER.warning(
+                    f"field_mapper에 필수 필드가 누락되었습니다: {missing_fields}"
+                )  # 경고 메시지 출력
 
     def _get_data_stream(
         self,
@@ -154,48 +178,44 @@ class CostManager(BaseManager):
         schema: Optional[str],  # 스키마 정보 (선택)
         task_options: Dict[str, Any],  # 작업별 옵션 (base_url 또는 bucket_name)
     ) -> Generator[List[Dict[str, Any]], None, None]:
-        """데이터 소스에 따른 스트림 생성 로직을 분리합니다."""
-        if "base_url" in task_options:  # base_url 옵션이 있으면 HTTP 스트림 생성
-            return self._get_http_stream(
-                options, secret_data, schema, task_options["base_url"]
-            )
-        elif (
-            "bucket_name" in task_options
-        ):  # bucket_name 옵션이 있으면 Google Cloud Storage 스트림 생성
-            return self._get_storage_stream(options, secret_data, schema, task_options)
-        elif "base_url" in options:  # base_url 옵션이 있으면 HTTP 스트림 생성
-            return self._get_http_stream(
-                options, secret_data, schema, options["base_url"]
-            )
-        else:  # 데이터 소스 정보가 없으면 오류 발생
+        """데이터 소스에 따라 적절한 데이터 스트림을 생성합니다."""
+        # HTTP 파일 연결 확인 (options 또는 task_options에서)
+        if "base_url" in options or "base_url" in task_options:
+            return self._get_http_file_stream(
+                options, secret_data, schema, task_options
+            )  # HTTP 파일 스트림 반환
+        # Google Cloud Storage 연결 확인 (options 또는 task_options에서)
+        elif "bucket_name" in options or "bucket_name" in task_options:
+            return self._get_google_storage_stream(
+                options, secret_data, schema, task_options
+            )  # Google Cloud Storage 스트림 반환
+        else:
             raise ValueError(
-                "데이터 소스 정보가 필요합니다 (base_url 또는 bucket_name)"
-            )
+                "데이터 소스 정보가 없습니다. base_url 또는 bucket_name을 설정하세요."
+            )  # 예외 발생
 
-    def _get_http_stream(
+    def _get_http_file_stream(
         self,
         options: Dict[
             str, Any
         ],  # 플러그인 옵션 (base_url, field_mapper, default_vars, type_mapper 등)
         secret_data: Dict[str, Any],  # 인증 정보
         schema: Optional[str],  # 스키마 정보 (선택)
-        base_url: str,  # 기본 URL
+        task_options: Dict[str, Any],  # 작업별 옵션 (base_url 또는 bucket_name)
     ) -> Generator[List[Dict[str, Any]], None, None]:
-        """HTTP 파일에서 데이터 스트림을 생성합니다.
+        """HTTP 파일에서 데이터 스트림을 생성합니다."""
+        # 직접 HTTPFileConnector 인스턴스 생성 (locator 의존성 제거)
+        http_connector = HTTPFileConnector(secret_data=secret_data)
+        http_connector.create_session(options, secret_data, schema)  # 세션 생성
 
-        Args:
-            options: 플러그인 옵션 (base_url, field_mapper, default_vars, type_mapper 등)
-            secret_data: 인증 정보
-            schema: 스키마 정보 (선택)
-            base_url: 기본 URL
-        """
-        http_file_connector = self.locator.get_connector(
-            HTTPFileConnector
-        )  # HTTPFileConnector 인스턴스 생성
-        http_file_connector.create_session(options, secret_data, schema)  # 세션 생성
-        return http_file_connector.get_cost_data(base_url)  # 데이터 스트림 반환
+        base_urls = options["base_url"]  # base_url 목록
+        if isinstance(base_urls, str):  # 단일 URL인 경우
+            base_urls = [base_urls]  # 리스트로 변환
 
-    def _get_storage_stream(
+        for base_url in base_urls:  # URL 순회
+            yield from http_connector.get_cost_data(base_url)  # 데이터 스트림 반환
+
+    def _get_google_storage_stream(
         self,
         options: Dict[
             str, Any
@@ -205,9 +225,8 @@ class CostManager(BaseManager):
         task_options: Dict[str, Any],  # 작업별 옵션 (base_url 또는 bucket_name)
     ) -> Generator[List[Dict[str, Any]], None, None]:
         """Google Cloud Storage에서 데이터 스트림을 생성합니다."""
-        storage_connector = self.locator.get_connector(
-            GoogleStorageConnector, secret_data=secret_data
-        )  # GoogleStorageConnector 인스턴스 생성
+        # 직접 GoogleStorageConnector 인스턴스 생성 (locator 의존성 제거)
+        storage_connector = GoogleStorageConnector(secret_data=secret_data)
         storage_connector.create_session(options, secret_data, schema)  # 세션 생성
         return storage_connector.get_cost_data(task_options)  # 데이터 스트림 반환
 
@@ -234,19 +253,51 @@ class CostManager(BaseManager):
                 processed_result = self._process_single_result(
                     result, options
                 )  # 단일 결과 처리
-                costs_data.append(processed_result)  # 처리된 결과 추가
+                # None이 아닌 경우만 추가 (유효하지 않은 데이터 필터링)
+                if processed_result is not None:
+                    costs_data.append(processed_result)  # 처리된 결과 추가
+                else:
+                    _LOGGER.debug("Skipped invalid data record")
             except Exception as e:  # 예외 처리
                 _LOGGER.error(f"개별 결과 처리 중 오류: {e}", exc_info=True)
-                raise CostDataProcessingError(f"결과 처리 실패: {e}") from e
+                # 개별 레코드 오류는 전체 처리를 중단하지 않고 스킵
+                _LOGGER.warning(
+                    f"Skipping problematic record due to error: {type(e).__name__}"
+                )
+                continue  # 다음 레코드로 계속
 
         return costs_data
 
     def _process_single_result(
         self, result: Dict[str, Any], options: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """단일 결과를 처리합니다."""
+        # 타입 안전성 검증 강화
+        if not isinstance(result, dict):
+            _LOGGER.error(
+                f"Expected dict but got {type(result).__name__}: {repr(result)[:200]}"
+            )
+            # 비딕셔너리 데이터를 완전히 필터링하여 처리 중단하지 않음
+            return None  # None 반환으로 스킵 처리
+
+        # 빈 딕셔너리 검증
+        if not result:
+            _LOGGER.warning("Empty dict received, skipping")
+            return None
+
+        # 데이터 정제 전 마지막 타입 검증
+        if not isinstance(result, dict):
+            _LOGGER.error(
+                f"Type changed unexpectedly before _clean_data: {type(result).__name__}"
+            )
+            return None
+
         # 데이터 정제
         result = self._clean_data(result)
+
+        # Google Cloud Billing 데이터인지 확인하고 처리
+        if self._is_google_cloud_billing_data(result):
+            result = self._process_google_cloud_billing_data(result)
 
         # 매퍼 적용
         if self.field_mapper:  # field_mapper 설정이 있으면 적용
@@ -265,8 +316,143 @@ class CostManager(BaseManager):
         # 최종 데이터 생성
         return self._create_final_data(result, options)  # 최종 데이터 생성
 
+    def _is_google_cloud_billing_data(self, result: Dict[str, Any]) -> bool:
+        """Google Cloud Billing 데이터인지 확인합니다."""
+        # Google Cloud Billing 전용 필드들이 있는지 확인
+        gcp_fields = [
+            "billing_account_id",
+            "service.id",
+            "sku.id",
+            "project.id",
+            "invoice.month",
+            "usage_start_time",
+            "usage_end_time",
+        ]
+
+        return any(field in result for field in gcp_fields)
+
+    def _process_google_cloud_billing_data(
+        self, result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Google Cloud Billing 데이터를 처리합니다."""
+        # 타입 안전성 검증
+        if not isinstance(result, dict):
+            _LOGGER.error(
+                f"_process_google_cloud_billing_data received non-dict: {type(result).__name__}"
+            )
+            return result  # 딕셔너리가 아니면 그대로 반환
+
+        # provider를 Google Cloud로 설정
+        result["provider"] = CostManagerConfig.GCP_BILLING_PROVIDER
+
+        # Google Cloud Billing 전용 필드들을 additional_info에 추가
+        additional_info = result.get("additional_info", {})
+
+        # billing_account_id 처리
+        if "billing_account_id" in result:
+            additional_info["billing_account_id"] = result["billing_account_id"]
+
+        # service 정보 처리
+        if "service.id" in result:
+            additional_info["service_id"] = result["service.id"]
+        if "service.description" in result:
+            additional_info["service_description"] = result["service.description"]
+
+        # sku 정보 처리
+        if "sku.id" in result:
+            additional_info["sku_id"] = result["sku.id"]
+        if "sku.description" in result:
+            additional_info["sku_description"] = result["sku.description"]
+
+        # project 정보 처리
+        if "project.id" in result:
+            additional_info["project_id"] = result["project.id"]
+        if "project.number" in result:
+            additional_info["project_number"] = result["project.number"]
+        if "project.name" in result:
+            additional_info["project_name"] = result["project.name"]
+        if "project.ancestry_numbers" in result:
+            additional_info["project_ancestry_numbers"] = result[
+                "project.ancestry_numbers"
+            ]
+
+        # location 정보 처리
+        if "location.location" in result:
+            additional_info["location_location"] = result["location.location"]
+        if "location.country" in result:
+            additional_info["location_country"] = result["location.country"]
+        if "location.region" in result:
+            additional_info["location_region"] = result["location.region"]
+        if "location.zone" in result:
+            additional_info["location_zone"] = result["location.zone"]
+
+        # invoice 정보 처리
+        if "invoice.month" in result:
+            additional_info["invoice_month"] = result["invoice.month"]
+        if "invoice.publisher_type" in result:
+            additional_info["invoice_publisher_type"] = result["invoice.publisher_type"]
+
+        # cost_type 처리
+        if "cost_type" in result:
+            additional_info["cost_type"] = result["cost_type"]
+
+        # usage 정보 처리
+        if "usage.amount" in result:
+            additional_info["usage_amount"] = result["usage.amount"]
+        if "usage.unit" in result:
+            additional_info["usage_unit"] = result["usage.unit"]
+        if "usage.amount_in_pricing_units" in result:
+            additional_info["usage_amount_in_pricing_units"] = result[
+                "usage.amount_in_pricing_units"
+            ]
+        if "usage.pricing_unit" in result:
+            additional_info["usage_pricing_unit"] = result["usage.pricing_unit"]
+
+        # credits 정보 처리
+        if "credits" in result:
+            additional_info["credits"] = result["credits"]
+
+        # adjustment_info 처리
+        if "adjustment_info" in result:
+            additional_info["adjustment_info"] = result["adjustment_info"]
+
+        # 기타 정보 처리
+        if "export_time" in result:
+            additional_info["export_time"] = result["export_time"]
+        if "cost_at_list" in result:
+            additional_info["cost_at_list"] = result["cost_at_list"]
+        if "transaction_type" in result:
+            additional_info["transaction_type"] = result["transaction_type"]
+        if "seller_name" in result:
+            additional_info["seller_name"] = result["seller_name"]
+
+        # currency 정보 처리
+        if "currency" in result:
+            additional_info["currency"] = result["currency"]
+        if "currency_conversion_rate" in result:
+            additional_info["currency_conversion_rate"] = result[
+                "currency_conversion_rate"
+            ]
+
+        # 라벨 및 태그 정보 처리
+        if "project.labels" in result:
+            additional_info["project_labels"] = result["project.labels"]
+        if "labels" in result:
+            additional_info["labels"] = result["labels"]
+        if "system_labels" in result:
+            additional_info["system_labels"] = result["system_labels"]
+        if "tags" in result:
+            additional_info["tags"] = result["tags"]
+
+        result["additional_info"] = additional_info
+        return result
+
     def _clean_data(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """데이터를 정제합니다."""
+        if not isinstance(result, dict):
+            _LOGGER.warning(f"_clean_data received non-dict data: {type(result)}")
+            return result  # 딕셔너리가 아니면 그대로 반환
+
         result = self._apply_strip_to_dict_keys(result)  # 키 정제
         result = self._apply_strip_to_dict_values(result)  # 값 정제
         return result
@@ -274,16 +460,23 @@ class CostManager(BaseManager):
     @staticmethod
     def _apply_strip_to_dict_keys(result: Dict[str, Any]) -> Dict[str, Any]:
         """딕셔너리의 모든 키에 strip()을 적용합니다."""
+        if not isinstance(result, dict):
+            return result  # 딕셔너리가 아니면 그대로 반환
+
         for key in list(result.keys()):  # 키 순회
-            new_key = key.strip()  # 키 정제
-            if new_key != key:  # 키 변경 시
-                result[new_key] = result[key]  # 키 변경
-                del result[key]  # 원본 키 삭제
+            if isinstance(key, str):  # 키가 문자열인 경우만 처리
+                new_key = key.strip()  # 키 정제
+                if new_key != key:  # 키 변경 시
+                    result[new_key] = result[key]  # 키 변경
+                    del result[key]  # 원본 키 삭제
         return result
 
     @staticmethod
     def _apply_strip_to_dict_values(result: Dict[str, Any]) -> Dict[str, Any]:
         """딕셔너리의 모든 문자열 값에 strip()을 적용합니다."""
+        if not isinstance(result, dict):
+            return result  # 딕셔너리가 아니면 그대로 반환
+
         for key, value in result.items():  # 키와 값 순회
             if isinstance(value, str):  # 문자열 타입인 경우
                 result[key] = value.strip()  # 값 정제
@@ -501,51 +694,35 @@ class CostManager(BaseManager):
             try:
                 return parse(str(date))  # 문자열로 변환 후 파싱
             except Exception as e:  # 예외 처리
-                _LOGGER.error(f"날짜 파싱 오류 (타입 변환 후): {e}", exc_info=True)
+                _LOGGER.error(f"날짜 파싱 오류: {e}", exc_info=True)
                 raise e  # 예외 발생
 
-    @staticmethod
-    def _format_date_only(date_str: Any) -> str:
-        """날짜 문자열에서 시간 부분을 제거하고 YYYY-MM-DD 형태로 변환합니다."""
-        if not date_str:
-            return ""  # 빈 문자열 반환
-
-        # 이미 datetime 객체인 경우
-        if hasattr(date_str, "strftime"):
-            return date_str.strftime(CostManagerConfig.DATE_FORMAT)
-
-        # 문자열이 아닌 경우 문자열로 변환
-        if not isinstance(date_str, str):
-            date_str = str(date_str)
-
-        try:
-            parsed_date = parse(date_str)  # 날짜 파싱
-            return parsed_date.strftime(CostManagerConfig.DATE_FORMAT)  # 날짜 형식 변환
-        except Exception:  # 예외 처리
-            if (
-                len(date_str) >= 10 and date_str[4] == "-" and date_str[7] == "-"
-            ):  # 날짜 형식 확인
-                return date_str[:10]  # 날짜 형식 변환
-            return date_str
+    def _format_date_only(self, date: Any) -> str:
+        """날짜만 추출하여 YYYY-MM-DD 형태로 변환합니다."""
+        parsed_date = self._parse_date(date)  # 날짜 파싱
+        return parsed_date.strftime(CostManagerConfig.DATE_FORMAT)  # 날짜 형식 변환
 
     def _validate_required_fields(self, result: Dict[str, Any]) -> None:
-        """필수 필드가 존재하는지 확인합니다."""
+        """필수 필드가 있는지 검증합니다."""
+        required_fields = ["cost", "billed_date"]  # 필수 필드 목록
         missing_fields = []  # 누락된 필드 목록
-        available_fields = list(result.keys())  # 사용 가능한 필드 목록
 
-        for field in CostManagerConfig.REQUIRED_FIELDS:  # 필수 필드 순회
-            if field not in result:  # 필드 존재 확인
+        for field in required_fields:  # 필수 필드 순회
+            if (
+                field not in result or result[field] is None
+            ):  # 필드가 없거나 None인 경우
                 missing_fields.append(field)  # 누락된 필드 추가
 
         if missing_fields:  # 누락된 필드가 있는 경우
-            error_message = f"필수 필드가 누락되었습니다: {missing_fields}. "  # 누락된 필드 정보 추가
+            available_fields = list(result.keys())  # 사용 가능한 필드 목록
+            error_message = (
+                f"필수 필드가 누락되었습니다: {missing_fields}. "  # 에러 메시지
+            )
             error_message += (
-                f"사용 가능한 필드: {available_fields}. "  # 사용 가능한 필드 정보 추가
+                f"사용 가능한 필드: {available_fields}. "  # 사용 가능한 필드 정보
             )
 
             if self.field_mapper:  # field_mapper 설정이 있는 경우
-                error_message += f"현재 field_mapper 설정: {self.field_mapper}. "
-                # 매핑 가능한 필드 제안
                 suggested_mappings = []  # 제안된 매핑 목록
                 for missing_field in missing_fields:  # 누락된 필드 순회
                     if (
@@ -608,7 +785,7 @@ class CostManager(BaseManager):
         else:
             total_cost = cost
 
-        return {
+        final_data = {
             "cost": str(total_cost),  # 총 비용
             "usage_quantity": str(usage_quantity),  # 사용량
             "usage_type": result.get("sku.description") or "",  # 사용 유형
@@ -621,6 +798,9 @@ class CostManager(BaseManager):
             "additional_info": result.get("additional_info") or {},  # 추가 정보
             "tags": result.get("tags.value") or {},  # 태그
         }
+
+        # 최종적으로 numpy 타입을 Python 기본 타입으로 변환
+        return convert_numpy_types(final_data)
 
     def get_linked_accounts(
         self,
