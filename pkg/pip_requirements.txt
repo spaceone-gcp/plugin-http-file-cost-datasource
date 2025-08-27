@@ -8,3 +8,4 @@ google-cloud-storage
 google-auth
 pyarrow
 fastparquet
+setuptools<81

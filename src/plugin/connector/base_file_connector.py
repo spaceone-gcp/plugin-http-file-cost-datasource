@@ -438,17 +438,17 @@ class BaseFileConnector(BaseConnector):
                     with gzip.open(
                         file_path, "rt", encoding="utf-8"
                     ) as f:  # gzip 압축 파일 읽기
-                        for line_num, line in enumerate(
-                            f, 1
-                        ):  # 줄 번호 및 줄 내용 반복
+                        for line in f:  # 줄 내용 반복
                             line_count += 1
                             line = line.strip()  # 줄 내용 제거 공백
 
-                            # 대용량 파일 진행 상황 로깅 (5000줄마다)
-                            if line_count % 5000 == 0:
+                            # 대용량 파일 진행 상황 로깅 (10000줄마다로 조정하여 성능 향상)
+                            if line_count % 10000 == 0:
                                 elapsed = time.time() - start_time
+                                rate = processed_count / elapsed if elapsed > 0 else 0
                                 _LOGGER.info(
-                                    f"Processing line {line_count}, parsed {processed_count} records ({elapsed:.1f}s)"
+                                    f"📊 Processing line {line_count:,}, parsed {processed_count:,} records "
+                                    f"({elapsed:.1f}s, {rate:.0f} records/sec)"
                                 )
 
                             if line:  # 줄 내용이 비어있지 않은 경우
@@ -548,15 +548,17 @@ class BaseFileConnector(BaseConnector):
                     with open(
                         file_path, encoding=detected_encoding
                     ) as f:  # 감지된 인코딩으로 파일 읽기
-                        for line_num, line in enumerate(f, 1):
+                        for line in f:
                             line_count += 1
                             line = line.strip()  # 줄 내용 제거 공백
 
-                            # 대용량 파일 진행 상황 로깅 (5000줄마다)
-                            if line_count % 5000 == 0:
+                            # 대용량 파일 진행 상황 로깅 (10000줄마다로 조정하여 성능 향상)
+                            if line_count % 10000 == 0:
                                 elapsed = time.time() - start_time
+                                rate = processed_count / elapsed if elapsed > 0 else 0
                                 _LOGGER.info(
-                                    f"Processing line {line_count}, parsed {processed_count} records ({elapsed:.1f}s)"
+                                    f"📊 Processing line {line_count:,}, parsed {processed_count:,} records "
+                                    f"({elapsed:.1f}s, {rate:.0f} records/sec)"
                                 )
 
                             if line:  # 줄 내용이 비어있지 않은 경우
@@ -586,8 +588,10 @@ class BaseFileConnector(BaseConnector):
                                     continue
 
                     elapsed_time = time.time() - start_time
+                    avg_rate = processed_count / elapsed_time if elapsed_time > 0 else 0
                     _LOGGER.info(
-                        f"Completed processing {processed_count} records from {line_count} lines ({elapsed_time:.2f}s)"
+                        f"✅ Completed processing {processed_count:,} records from {line_count:,} lines "
+                        f"({elapsed_time:.2f}s, average {avg_rate:.0f} records/sec)"
                     )
                 except UnicodeDecodeError as e:
                     _LOGGER.error(f"UTF-8 decode error for JSON file {file_path}: {e}")

@@ -1,3 +1,4 @@
+import gc
 import logging
 import time
 from decimal import Decimal
@@ -36,10 +37,6 @@ class CostManagerConfig:
     CSV_PROVIDER = "csv"  # CSV 파일 제공자
     DATE_FORMAT = "%Y-%m-%d"  # 날짜 형식
     ACCOUNT_ID_PADDING_LENGTH = 12  # 계정 ID 패딩 길이
-
-    # Google Cloud Billing 전용 상수
-    GCP_PROVIDER = "gcp"  # Google Cloud 제공자
-    GCP_BILLING_PROVIDER = "google_cloud"  # Google Cloud Billing 제공자
 
     # Google Cloud Billing 전용 상수
     GCP_PROVIDER = "gcp"  # Google Cloud 제공자
@@ -97,8 +94,11 @@ class CostManager(BaseManager):
             ValueError: 데이터 소스 정보가 없을 때
             CostDataProcessingError: 데이터 처리 중 오류 발생 시
         """
-        _LOGGER.info("비용 데이터 수집 시작")
+        _LOGGER.info("🚀 비용 데이터 수집 시작")
         start_time = time.time()  # 시작 시간 기록
+
+        # 메모리 사용량 모니터링
+        initial_memory_objects = len(gc.get_objects())
 
         try:
             self._setup_mappers(options)  # 매퍼 설정
@@ -115,13 +115,30 @@ class CostManager(BaseManager):
                 yield {"results": costs_data}  # 비용 데이터 반환
 
             duration = time.time() - start_time  # 소요 시간 계산
-            _LOGGER.info(
-                f"비용 데이터 수집 완료: {total_processed_count}개 처리, {duration:.2f}초 소요"
-            )
+            final_memory_objects = len(gc.get_objects())
+            memory_diff = final_memory_objects - initial_memory_objects
+            if duration > 0:
+                _LOGGER.info(
+                    f"✅ 비용 데이터 수집 완료: {total_processed_count:,}개 처리, {duration:.2f}초 소요 "
+                    f"(평균 {total_processed_count / duration:.1f}개/초, 메모리 객체 증가: {memory_diff:+,}개)"
+                )
+            else:
+                _LOGGER.info(
+                    f"✅ 비용 데이터 수집 완료: {total_processed_count:,}개 처리, {duration:.2f}초 소요"
+                )
 
         except Exception as e:  # 예외 처리
-            _LOGGER.error(f"비용 데이터 수집 중 오류 발생: {e}", exc_info=True)
-            raise CostDataProcessingError(f"데이터 수집 실패: {e}") from e
+            _LOGGER.error(f"❌ 비용 데이터 수집 중 오류 발생: {e}", exc_info=True)
+            # 에러 타입에 따른 구체적인 메시지 제공
+            if "bucket_name" in str(e):
+                error_msg = f"Google Cloud Storage 연결 실패: {e}"
+            elif "base_url" in str(e):
+                error_msg = f"HTTP 파일 연결 실패: {e}"
+            elif "field_mapper" in str(e):
+                error_msg = f"필드 매핑 설정 오류: {e}"
+            else:
+                error_msg = f"데이터 수집 실패: {e}"
+            raise CostDataProcessingError(error_msg) from e
 
     def _setup_mappers(self, options: Dict[str, Any]) -> None:
         """매퍼 설정을 초기화합니다."""
@@ -153,21 +170,27 @@ class CostManager(BaseManager):
                 missing_fields.append(required_field)  # 누락된 필드 추가
 
         if missing_fields:  # 누락된 필드가 있는 경우
-            # Google Cloud Billing 데이터인지 확인
+            # Google Cloud Billing 데이터인지 확인 (더 광범위한 패턴 감지)
             is_gcp_billing = (
                 self.field_mapper.get("billing_account_id")
                 or self.field_mapper.get("service_id")
                 or self.field_mapper.get("project_id")
+                or self.field_mapper.get("usage_start_time")
+                or self.field_mapper.get("product") == "service.description"
+                or self.field_mapper.get("region_code") == "location.region"
+                or self.field_mapper.get("usage_unit") == "usage.pricing_unit"
+                or self.field_mapper.get("credits_amount") == "credits.amount"
             )
 
             if is_gcp_billing:
-                _LOGGER.debug(
-                    f"Google Cloud Billing 데이터 - 자동 필드 매핑 사용: {missing_fields}"
-                )  # 디버그 메시지로 변경
+                _LOGGER.info(
+                    f"🔧 Google Cloud Billing 데이터 감지 - 자동 필드 매핑을 사용합니다: {missing_fields}"
+                )  # 정보 메시지로 변경하여 사용자에게 명확히 알림
             else:
                 _LOGGER.warning(
-                    f"field_mapper에 필수 필드가 누락되었습니다: {missing_fields}"
-                )  # 경고 메시지 출력
+                    f"⚠️  field_mapper에 필수 필드가 누락되었습니다: {missing_fields}. "
+                    f"데이터 처리에 문제가 발생할 수 있습니다."
+                )  # 더 명확한 경고 메시지
 
     def _get_data_stream(
         self,
