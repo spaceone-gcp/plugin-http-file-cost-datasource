@@ -6,19 +6,21 @@
 """
 
 from schematics.models import Model
-from schematics.types import ListType, DictType, StringType, BooleanType
+from schematics.types import BooleanType, DictType, ListType, StringType
 from schematics.types.compound import ModelType
 
 # 모델 클래스 정의
 __all__ = ["PluginMetadata"]
 
+
 class MatchServiceAccount(Model):
     """
     서비스 계정 매칭 정보를 정의하는 모델
-    
+
     데이터 소스에서 특정 서비스 계정을 매칭할 때 사용되는
     소스와 타겟 정보를 포함합니다.
     """
+
     # 매칭할 서비스 계정의 소스 식별자
     source = StringType(required=True)
     # 매칭될 서비스 계정의 타겟 식별자
@@ -28,9 +30,10 @@ class MatchServiceAccount(Model):
 class Actions(Model):
     """
     데이터 소스 규칙에서 수행할 액션들을 정의하는 모델
-    
+
     규칙이 조건을 만족할 때 실행될 다양한 액션들을 포함합니다.
     """
+
     # 서비스 계정 매칭 액션
     match_service_account = ModelType(MatchServiceAccount)
 
@@ -38,9 +41,10 @@ class Actions(Model):
 class Options(Model):
     """
     데이터 소스 규칙의 옵션 설정을 정의하는 모델
-    
+
     규칙 처리 시의 추가적인 동작 옵션들을 포함합니다.
     """
+
     # 조건 만족 시 처리 중단 여부 (기본값: False)
     stop_processing = BooleanType(default=False)
 
@@ -48,9 +52,10 @@ class Options(Model):
 class Condition(Model):
     """
     데이터 소스 규칙의 조건을 정의하는 모델
-    
+
     규칙이 적용될지 결정하는 조건들을 정의합니다.
     """
+
     # 조건을 확인할 키 (필드명)
     key = StringType(required=True)
     # 비교할 값
@@ -64,10 +69,11 @@ class Condition(Model):
 class DataSourceRule(Model):
     """
     데이터 소스 규칙을 정의하는 모델
-    
+
     비용 데이터를 처리할 때 적용될 규칙을 정의합니다.
     조건, 액션, 옵션 등을 포함하여 복잡한 데이터 처리 로직을 표현할 수 있습니다.
     """
+
     # 규칙의 고유 이름
     name = StringType(required=True)
     # 규칙 적용을 위한 조건들 (기본값: 빈 리스트)
@@ -85,10 +91,11 @@ class DataSourceRule(Model):
 class PluginMetadata(Model):
     """
     플러그인 메타데이터를 정의하는 모델
-    
+
     HTTP 파일 비용 데이터 소스 플러그인의 전체 설정 정보를 포함합니다.
     데이터 소스 규칙들과 기본 통화 설정을 관리합니다.
     """
+
     # 데이터 소스 처리 규칙들 (기본값: 빈 리스트)
     data_source_rules = ListType(ModelType(DataSourceRule), default=[])
     # 비용 데이터의 기본 통화 (기본값: USD)

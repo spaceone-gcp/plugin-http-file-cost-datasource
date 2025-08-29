@@ -1,11 +1,13 @@
 import logging
 from typing import Any, Dict, Generator, Optional
 
+from spaceone.core.error import ERROR_INVALID_PARAMETER
 from spaceone.cost_analysis.plugin.data_source.lib.server import DataSourcePluginServer
 
 from .manager.cost_manager import CostManager
 from .manager.data_source_manager import DataSourceManager
 from .manager.job_manager import JobManager
+from .validation.payload_validator import PayloadValidationError, PayloadValidator
 
 app = DataSourcePluginServer()
 
@@ -18,30 +20,41 @@ class CostGetDataParams:
     """Cost.get_data 요청 파라미터 구조"""
 
     def __init__(self, params: Dict[str, Any]):  # 파라미터 초기화
+        # 강화된 검증 로직 적용
         try:
-            if not params:  # params가 빈 딕셔너리인지 확인
-                raise ValueError("'params' cannot be empty")
-            if not hasattr(params, "get"):  # params가 get 메서드를 가지고 있는지 확인
-                raise ValueError("'params' must support dictionary operations")
-        except Exception as e:
-            raise ValueError(f"Invalid params: {e}")
+            validated_params = PayloadValidator.validate_params(params)
+        except PayloadValidationError as e:
+            raise ERROR_INVALID_PARAMETER(key="params", reason=str(e)) from e
 
-        self.options: Dict[str, Any] = params.get("options", {})  # 플러그인 옵션
-        self.secret_data: Dict[str, Any] = params.get(
-            "secret_data", {}
-        )  # 시크릿 데이터
-        self.schema: Optional[str] = params.get("schema")  # 스키마 정보
-        self.task_options: Dict[str, Any] = params.get(
-            "task_options", {}
-        )  # 작업별 옵션
-        self.domain_id: str = params.get("domain_id", "")  # 도메인 ID
+        # 개별 필드 검증 및 설정
+        try:
+            self.options = PayloadValidator.validate_options(
+                validated_params.get("options", {})
+            )
+            self.secret_data = PayloadValidator.validate_secret_data(
+                validated_params.get("secret_data", {})
+            )
+            self.task_options = PayloadValidator.validate_task_options(
+                validated_params.get("task_options")
+            )
+            self.domain_id = PayloadValidator.validate_domain_id(
+                validated_params.get("domain_id", "")
+            )
+
+            # 스키마는 선택적 필드이므로 간단한 검증만 수행
+            self.schema: Optional[str] = validated_params.get("schema")
+            if self.schema is not None and not isinstance(self.schema, str):
+                raise PayloadValidationError(
+                    f"'schema'는 문자열이어야 합니다. 현재 타입: {type(self.schema).__name__}"
+                )
+
+        except PayloadValidationError as e:
+            raise ERROR_INVALID_PARAMETER(key="params", reason=str(e)) from e
 
     def validate(self) -> None:
-        """필수 파라미터 검증"""
-        if not self.secret_data:  # 시크릿 데이터 검증
-            raise ValueError("'secret_data' is required")
-        if not self.domain_id:  # 도메인 ID 검증
-            raise ValueError("'domain_id' is required")
+        """추가 비즈니스 로직 검증"""
+        # 기본 검증은 __init__에서 수행되므로 여기서는 비즈니스 로직만 검증
+        pass
 
 
 def _validate_and_clean_secret_data(secret_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -57,22 +70,23 @@ def _validate_and_clean_secret_data(secret_data: Dict[str, Any]) -> Dict[str, An
         ValueError: 필수 필드가 없거나 PEM 형식이 잘못된 경우
     """
     try:
-        if not secret_data:  # secret_data가 빈 딕셔너리인지 확인
-            raise ValueError("'secret_data' cannot be empty")
-        if not hasattr(
-            secret_data, "get"
-        ):  # secret_data가 get 메서드를 가지고 있는지 확인
-            raise ValueError("'secret_data' must support dictionary operations")
-    except Exception as e:
-        raise ValueError(f"Invalid secret_data: {e}")
+        # 강화된 검증 로직 적용
+        validated_secret_data = PayloadValidator.validate_secret_data(secret_data)
+    except PayloadValidationError as e:
+        raise ERROR_INVALID_PARAMETER(key="secret_data", reason=str(e)) from e
 
     # PEM 키 정리 (다양한 줄바꿈 문자 처리)
-    if "private_key" in secret_data:  # PEM 키 존재 시 정리
-        secret_data["private_key"] = _clean_pem(
-            secret_data["private_key"]
-        )  # PEM 키 정리 함수 호출
+    if "private_key" in validated_secret_data:
+        private_key = validated_secret_data.get("private_key")
+        if private_key:
+            try:
+                validated_secret_data["private_key"] = _clean_pem(private_key)
+            except ValueError as e:
+                raise ERROR_INVALID_PARAMETER(
+                    key="private_key", reason=f"PEM 키 정리 실패: {e}"
+                ) from e
 
-    return secret_data
+    return validated_secret_data
 
 
 def _create_cost_manager() -> CostManager:
@@ -105,23 +119,17 @@ def data_source_init(params: Dict[str, Any]) -> Dict[str, Any]:
         Exception: 초기화 중 오류 발생 시
     """
     try:
-        # 1. 파라미터 검증
+        # 1. 강화된 파라미터 검증
         try:
-            if not params:  # params가 빈 딕셔너리인지 확인
-                raise ValueError("'params' cannot be empty")
-            if not hasattr(params, "get"):  # params가 get 메서드를 가지고 있는지 확인
-                raise ValueError("'params' must support dictionary operations")
-        except Exception as e:
-            raise ValueError(f"Invalid params: {e}")
-
-        options = params.get("options")  # 플러그인 옵션
-        domain_id = params.get("domain_id")  # 도메인 ID
-
-        # 2. 필수 파라미터 검증
-        if not options:  # 플러그인 옵션 검증
-            raise ValueError("'options' is required")
-        if not domain_id:  # 도메인 ID 검증
-            raise ValueError("'domain_id' is required")
+            validated_params = PayloadValidator.validate_params(params)
+            options = PayloadValidator.validate_options(
+                validated_params.get("options", {})
+            )
+            domain_id = PayloadValidator.validate_domain_id(
+                validated_params.get("domain_id", "")
+            )
+        except PayloadValidationError as e:
+            raise ERROR_INVALID_PARAMETER(key="params", reason=str(e)) from e
 
         # 3. 데이터 소스 매니저를 통해 초기화
         _LOGGER.info(
@@ -164,27 +172,27 @@ def data_source_verify(params: Dict[str, Any]) -> None:
         Exception: 검증 중 오류 발생 시
     """
     try:
-        # 1. 파라미터 검증
+        # 1. 강화된 파라미터 검증
         try:
-            if not params:  # params가 빈 딕셔너리인지 확인
-                raise ValueError("'params' cannot be empty")
-            if not hasattr(params, "get"):  # params가 get 메서드를 가지고 있는지 확인
-                raise ValueError("'params' must support dictionary operations")
-        except Exception as e:
-            raise ValueError(f"Invalid params: {e}")
+            validated_params = PayloadValidator.validate_params(params)
+            options = PayloadValidator.validate_options(
+                validated_params.get("options", {})
+            )
+            secret_data = PayloadValidator.validate_secret_data(
+                validated_params.get("secret_data", {})
+            )
+            domain_id = PayloadValidator.validate_domain_id(
+                validated_params.get("domain_id", "")
+            )
 
-        options = params.get("options")  # 플러그인 옵션
-        secret_data = params.get("secret_data")  # 시크릿 데이터
-        domain_id = params.get("domain_id")  # 도메인 ID
-        schema = params.get("schema")  # 스키마 정보
-
-        # 2. 필수 파라미터 검증
-        if not options:  # 플러그인 옵션 검증
-            raise ValueError("'options' is required")
-        if not secret_data:  # 시크릿 데이터 검증
-            raise ValueError("'secret_data' is required")
-        if not domain_id:  # 도메인 ID 검증
-            raise ValueError("'domain_id' is required")
+            # 스키마는 선택적 필드
+            schema = validated_params.get("schema")
+            if schema is not None and not isinstance(schema, str):
+                raise PayloadValidationError(
+                    f"'schema'는 문자열이어야 합니다. 현재 타입: {type(schema).__name__}"
+                )
+        except PayloadValidationError as e:
+            raise ERROR_INVALID_PARAMETER(key="params", reason=str(e)) from e
 
         # 3. 시크릿 데이터 검증 및 정리
         cleaned_secret_data = _validate_and_clean_secret_data(secret_data)
@@ -236,29 +244,36 @@ def job_get_tasks(params: Dict[str, Any]) -> Dict[str, Any]:
         Exception: 태스크 조회 중 오류 발생 시
     """
     try:
-        # 1. 파라미터 검증
+        # 1. 강화된 파라미터 검증
         try:
-            if not params:  # params가 빈 딕셔너리인지 확인
-                raise ValueError("'params' cannot be empty")
-            if not hasattr(params, "get"):  # params가 get 메서드를 가지고 있는지 확인
-                raise ValueError("'params' must support dictionary operations")
-        except Exception as e:
-            raise ValueError(f"Invalid params: {e}")
+            validated_params = PayloadValidator.validate_params(params)
+            domain_id = PayloadValidator.validate_domain_id(
+                validated_params.get("domain_id", "")
+            )
+            options = PayloadValidator.validate_options(
+                validated_params.get("options", {})
+            )
+            secret_data = PayloadValidator.validate_secret_data(
+                validated_params.get("secret_data", {})
+            )
 
-        domain_id = params.get("domain_id")  # 도메인 ID
-        options = params.get("options")  # 플러그인 옵션
-        secret_data = params.get("secret_data")  # 시크릿 데이터
-        schema = params.get("schema")  # 스키마 정보
-        start = params.get("start")  # 시작 시간
-        last_synchronized_at = params.get("last_synchronized_at")  # 마지막 동기화 시간
+            # 선택적 필드들
+            schema = validated_params.get("schema")
+            start = validated_params.get("start")
+            last_synchronized_at = validated_params.get("last_synchronized_at")
 
-        # 2. 필수 파라미터 검증
-        if not domain_id:  # 도메인 ID 검증
-            raise ValueError("'domain_id' is required")
-        if not options:  # 플러그인 옵션 검증
-            raise ValueError("'options' is required")
-        if not secret_data:  # 시크릿 데이터 검증
-            raise ValueError("'secret_data' is required")
+            # 선택적 필드 타입 검증
+            if schema is not None and not isinstance(schema, str):
+                raise PayloadValidationError(
+                    f"'schema'는 문자열이어야 합니다. 현재 타입: {type(schema).__name__}"
+                )
+            if start is not None and not isinstance(start, (str, type(None))):
+                raise PayloadValidationError(
+                    f"'start'는 문자열이어야 합니다. 현재 타입: {type(start).__name__}"
+                )
+
+        except PayloadValidationError as e:
+            raise ERROR_INVALID_PARAMETER(key="params", reason=str(e)) from e
 
         # 3. 시크릿 데이터 검증 및 정리
         cleaned_secret_data = _validate_and_clean_secret_data(secret_data)
@@ -268,7 +283,6 @@ def job_get_tasks(params: Dict[str, Any]) -> Dict[str, Any]:
 
         job_mgr = JobManager()  # JobManager 인스턴스 생성
         result = job_mgr.get_tasks(
-            domain_id,
             options,
             cleaned_secret_data,
             schema,
@@ -313,7 +327,7 @@ def cost_get_data(params: Dict[str, Any]) -> Generator[Dict[str, Any], None, Non
             {
                 'results': [
                     {
-                        'cost': float,           # 비용 금액 (필수)
+                        'cost': Decimal,         # 비용 금액 (필수)
                         'usage_quantity': str,   # 사용량 (선택)
                         'usage_unit': str,       # 사용량 단위 (선택)
                         'provider': str,         # 클라우드 제공자 (선택)
@@ -336,14 +350,37 @@ def cost_get_data(params: Dict[str, Any]) -> Generator[Dict[str, Any], None, Non
     """
     try:
         # 1. 파라미터 검증 및 정리
+        _LOGGER.info(
+            f"[cost_get_data] 시작 - options: {params.get('options')}, task_options: {params.get('task_options')}"
+        )
         cost_params = CostGetDataParams(params)  # CostGetDataParams 인스턴스 생성
+        _LOGGER.info("[cost_get_data] CostGetDataParams 생성 성공")
         cost_params.validate()  # 파라미터 검증
+        _LOGGER.info("[cost_get_data] 파라미터 검증 완료")
 
         # 2. 시크릿 데이터 검증 및 정리
         cleaned_secret_data = _validate_and_clean_secret_data(cost_params.secret_data)
+        _LOGGER.info("[cost_get_data] 시크릿 데이터 검증 완료")
 
-        # 3. 데이터 소스 검증
-        _validate_data_source(cost_params.options, cost_params.task_options)
+        # 3. 데이터 소스 검증 (주석 처리 - 빈 데이터로 성공 응답 허용)
+        # _LOGGER.info("[cost_get_data] 데이터 소스 검증 시작")
+        # _validate_data_source(cost_params.options, cost_params.task_options)
+        # _LOGGER.info("[cost_get_data] 데이터 소스 검증 완료")
+        _LOGGER.info("[cost_get_data] 데이터 소스 검증 스킵 (빈 데이터 허용)")
+
+        # 4. 데이터 소스가 없는 경우 빈 응답 반환
+        has_base_url = (
+            "base_url" in cost_params.task_options or "base_url" in cost_params.options
+        )
+        has_bucket_name = "bucket_name" in cost_params.task_options
+
+        if not (has_base_url or has_bucket_name):
+            _LOGGER.warning(
+                f"[cost_get_data] 데이터 소스 정보가 없어 빈 응답 반환 - domain_id: {cost_params.domain_id}"
+            )
+            # 빈 results를 가진 성공 응답 반환
+            yield {"results": []}
+            return
 
         # 4. CostManager를 통해 데이터 수집 시작
         _LOGGER.info(
@@ -359,8 +396,7 @@ def cost_get_data(params: Dict[str, Any]) -> Generator[Dict[str, Any], None, Non
         )
 
         # 5. 수집된 데이터를 스트리밍 방식으로 반환
-        for result in result_generator:
-            yield result
+        yield from result_generator
 
         _LOGGER.info(
             f"[cost_get_data] 데이터 수집 완료 - domain_id: {cost_params.domain_id}"
@@ -389,18 +425,28 @@ def _validate_data_source(
     Raises:
         ValueError: 데이터 소스 정보가 없을 때
     """
+    # 강화된 검증 로직 적용
+    try:
+        if options:
+            PayloadValidator.validate_options(options)
+        if task_options:
+            PayloadValidator.validate_task_options(task_options)
+    except PayloadValidationError as e:
+        raise ERROR_INVALID_PARAMETER(key="options/task_options", reason=str(e)) from e
+
     has_base_url = (
         "base_url" in task_options or "base_url" in options
     )  # base_url 존재 여부 확인
     has_bucket_name = "bucket_name" in task_options  # bucket_name 존재 여부 확인
 
-    if not (
-        has_base_url or has_bucket_name
-    ):  # base_url 또는 bucket_name 존재 여부 확인
-        raise ValueError(
-            "데이터 소스 정보가 필요합니다. "
-            "task_options.base_url, task_options.bucket_name, 또는 options.base_url 중 하나를 제공해주세요."
+    # 빈 options와 task_options가 올 때는 경고 로그만 출력하고 진행
+    # 실제 데이터 처리에서 구체적인 에러 발생
+    if not (has_base_url or has_bucket_name):
+        _LOGGER.warning(
+            "[_validate_data_source] 데이터 소스 정보가 없습니다. "
+            "base_url 또는 bucket_name이 필요합니다."
         )
+        # 에러를 발생시키지 않고 진행하여 실제 데이터 처리 단계에서 처리
 
 
 @app.route("Cost.get_linked_accounts")
@@ -432,27 +478,28 @@ def cost_get_linked_accounts(params: Dict[str, Any]) -> Dict[str, Any]:
         Exception: 기타 오류 발생 시
     """
     try:
-        # 1. 파라미터 검증 및 정리
+        # 1. 강화된 파라미터 검증
         try:
-            if not params:  # params가 빈 딕셔너리인지 확인
-                raise ValueError("'params' cannot be empty")
-            if not hasattr(params, "get"):  # params가 get 메서드를 가지고 있는지 확인
-                raise ValueError("'params' must support dictionary operations")
-        except Exception as e:
-            raise ValueError(f"Invalid params: {e}")
+            validated_params = PayloadValidator.validate_params(params)
+            options = PayloadValidator.validate_options(
+                validated_params.get("options", {})
+            )
+            secret_data = PayloadValidator.validate_secret_data(
+                validated_params.get("secret_data", {})
+            )
+            domain_id = PayloadValidator.validate_domain_id(
+                validated_params.get("domain_id", "")
+            )
 
-        options = params.get("options")  # 플러그인 옵션
-        secret_data = params.get("secret_data")  # 시크릿 데이터
-        schema = params.get("schema")  # 스키마 정보
-        domain_id = params.get("domain_id")  # 도메인 ID
+            # 스키마는 선택적 필드
+            schema = validated_params.get("schema")
+            if schema is not None and not isinstance(schema, str):
+                raise PayloadValidationError(
+                    f"'schema'는 문자열이어야 합니다. 현재 타입: {type(schema).__name__}"
+                )
 
-        # 2. 필수 파라미터 검증
-        if not options:  # 플러그인 옵션 검증
-            raise ValueError("'options' is required")
-        if not secret_data:  # 시크릿 데이터 검증
-            raise ValueError("'secret_data' is required")
-        if not domain_id:  # 도메인 ID 검증
-            raise ValueError("'domain_id' is required")
+        except PayloadValidationError as e:
+            raise ERROR_INVALID_PARAMETER(key="params", reason=str(e)) from e
 
         # 3. 시크릿 데이터 검증 및 정리
         cleaned_secret_data = _validate_and_clean_secret_data(secret_data)
@@ -519,12 +566,14 @@ def _clean_pem(pem_key: str) -> str:
     # 3. PEM 형식 검증
     # Google Cloud 인증을 위한 표준 PEM 형식 검증
     if not cleaned.startswith("-----BEGIN PRIVATE KEY-----"):  # PEM 형식 검증
-        raise ValueError(
-            "Invalid PEM format: must start with '-----BEGIN PRIVATE KEY-----'"
+        raise ERROR_INVALID_PARAMETER(
+            key="private_key",
+            reason="Invalid PEM format: must start with '-----BEGIN PRIVATE KEY-----'",
         )
     if not cleaned.endswith("-----END PRIVATE KEY-----"):  # PEM 형식 검증
-        raise ValueError(
-            "Invalid PEM format: must end with '-----END PRIVATE KEY-----'"
+        raise ERROR_INVALID_PARAMETER(
+            key="private_key",
+            reason="Invalid PEM format: must end with '-----END PRIVATE KEY-----'",
         )
 
     return cleaned

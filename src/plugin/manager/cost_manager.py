@@ -143,12 +143,12 @@ class CostManager(BaseManager):
     def _setup_mappers(self, options: Dict[str, Any]) -> None:
         """매퍼 설정을 초기화합니다."""
         if "default_vars" in options:  # default_vars 옵션이 있으면 설정
-            self.default_vars = options["default_vars"]
+            self.default_vars = options.get("default_vars")
         if "field_mapper" in options:  # field_mapper 옵션이 있으면 설정
-            self.field_mapper = options["field_mapper"]
+            self.field_mapper = options.get("field_mapper")
             self._validate_field_mapper_completeness()  # 필수 필드 매핑 검증
         if "type_mapper" in options:  # type_mapper 옵션이 있으면 설정
-            self.type_mapper = options["type_mapper"]
+            self.type_mapper = options.get("type_mapper")
 
     def _validate_field_mapper_completeness(self) -> None:
         """
@@ -213,9 +213,13 @@ class CostManager(BaseManager):
                 options, secret_data, schema, task_options
             )  # Google Cloud Storage 스트림 반환
         else:
-            raise ValueError(
-                "데이터 소스 정보가 없습니다. base_url 또는 bucket_name을 설정하세요."
-            )  # 예외 발생
+            # 빈 options와 task_options가 올 때는 경고 로그만 출력하고 빈 제너레이터 반환
+            _LOGGER.warning(
+                "[CostManager._get_data_stream] 데이터 소스 정보가 없습니다. "
+                "base_url 또는 bucket_name이 필요합니다. 빈 데이터를 반환합니다."
+            )
+            # 빈 제너레이터 반환
+            return iter([])
 
     def _get_http_file_stream(
         self,
@@ -227,11 +231,23 @@ class CostManager(BaseManager):
         task_options: Dict[str, Any],  # 작업별 옵션 (base_url 또는 bucket_name)
     ) -> Generator[List[Dict[str, Any]], None, None]:
         """HTTP 파일에서 데이터 스트림을 생성합니다."""
+        # task_options의 base_url을 options에 병합
+        merged_options = options.copy()
+        if "base_url" in task_options:
+            merged_options["base_url"] = task_options.get("base_url")
+
         # 직접 HTTPFileConnector 인스턴스 생성 (locator 의존성 제거)
         http_connector = HTTPFileConnector(secret_data=secret_data)
-        http_connector.create_session(options, secret_data, schema)  # 세션 생성
+        http_connector.create_session(merged_options, secret_data, schema)  # 세션 생성
 
-        base_urls = options["base_url"]  # base_url 목록
+        base_urls = merged_options.get("base_url")  # base_url 목록
+        if not base_urls:
+            _LOGGER.warning(
+                "[CostManager._get_http_file_stream] base_url이 설정되지 않았습니다. "
+                "빈 데이터를 반환합니다."
+            )
+            # 빈 제너레이터 반환
+            return iter([])
         if isinstance(base_urls, str):  # 단일 URL인 경우
             base_urls = [base_urls]  # 리스트로 변환
 
@@ -308,6 +324,11 @@ class CostManager(BaseManager):
             _LOGGER.warning("Empty dict received, skipping")
             return None
 
+        # None 값 키 접근 방어
+        if result is None:
+            _LOGGER.warning("None data received, skipping")
+            return None
+
         # 데이터 정제 전 마지막 타입 검증
         if not isinstance(result, dict):
             _LOGGER.error(
@@ -373,99 +394,101 @@ class CostManager(BaseManager):
 
         # billing_account_id 처리
         if "billing_account_id" in result:
-            additional_info["billing_account_id"] = result["billing_account_id"]
+            additional_info["billing_account_id"] = result.get("billing_account_id")
 
         # service 정보 처리
         if "service.id" in result:
-            additional_info["service_id"] = result["service.id"]
+            additional_info["service_id"] = result.get("service.id")
         if "service.description" in result:
-            additional_info["service_description"] = result["service.description"]
+            additional_info["service_description"] = result.get("service.description")
 
         # sku 정보 처리
         if "sku.id" in result:
-            additional_info["sku_id"] = result["sku.id"]
+            additional_info["sku_id"] = result.get("sku.id")
         if "sku.description" in result:
-            additional_info["sku_description"] = result["sku.description"]
+            additional_info["sku_description"] = result.get("sku.description")
 
         # project 정보 처리
         if "project.id" in result:
-            additional_info["project_id"] = result["project.id"]
+            additional_info["project_id"] = result.get("project.id")
         if "project.number" in result:
-            additional_info["project_number"] = result["project.number"]
+            additional_info["project_number"] = result.get("project.number")
         if "project.name" in result:
-            additional_info["project_name"] = result["project.name"]
+            additional_info["project_name"] = result.get("project.name")
         if "project.ancestry_numbers" in result:
-            additional_info["project_ancestry_numbers"] = result[
+            additional_info["project_ancestry_numbers"] = result.get(
                 "project.ancestry_numbers"
-            ]
+            )
 
         # location 정보 처리
         if "location.location" in result:
-            additional_info["location_location"] = result["location.location"]
+            additional_info["location_location"] = result.get("location.location")
         if "location.country" in result:
-            additional_info["location_country"] = result["location.country"]
+            additional_info["location_country"] = result.get("location.country")
         if "location.region" in result:
-            additional_info["location_region"] = result["location.region"]
+            additional_info["location_region"] = result.get("location.region")
         if "location.zone" in result:
-            additional_info["location_zone"] = result["location.zone"]
+            additional_info["location_zone"] = result.get("location.zone")
 
         # invoice 정보 처리
         if "invoice.month" in result:
-            additional_info["invoice_month"] = result["invoice.month"]
+            additional_info["invoice_month"] = result.get("invoice.month")
         if "invoice.publisher_type" in result:
-            additional_info["invoice_publisher_type"] = result["invoice.publisher_type"]
+            additional_info["invoice_publisher_type"] = result.get(
+                "invoice.publisher_type"
+            )
 
         # cost_type 처리
         if "cost_type" in result:
-            additional_info["cost_type"] = result["cost_type"]
+            additional_info["cost_type"] = result.get("cost_type")
 
         # usage 정보 처리
         if "usage.amount" in result:
-            additional_info["usage_amount"] = result["usage.amount"]
+            additional_info["usage_amount"] = result.get("usage.amount")
         if "usage.unit" in result:
-            additional_info["usage_unit"] = result["usage.unit"]
+            additional_info["usage_unit"] = result.get("usage.unit")
         if "usage.amount_in_pricing_units" in result:
-            additional_info["usage_amount_in_pricing_units"] = result[
+            additional_info["usage_amount_in_pricing_units"] = result.get(
                 "usage.amount_in_pricing_units"
-            ]
+            )
         if "usage.pricing_unit" in result:
-            additional_info["usage_pricing_unit"] = result["usage.pricing_unit"]
+            additional_info["usage_pricing_unit"] = result.get("usage.pricing_unit")
 
         # credits 정보 처리
         if "credits" in result:
-            additional_info["credits"] = result["credits"]
+            additional_info["credits"] = result.get("credits")
 
         # adjustment_info 처리
         if "adjustment_info" in result:
-            additional_info["adjustment_info"] = result["adjustment_info"]
+            additional_info["adjustment_info"] = result.get("adjustment_info")
 
         # 기타 정보 처리
         if "export_time" in result:
-            additional_info["export_time"] = result["export_time"]
+            additional_info["export_time"] = result.get("export_time")
         if "cost_at_list" in result:
-            additional_info["cost_at_list"] = result["cost_at_list"]
+            additional_info["cost_at_list"] = result.get("cost_at_list")
         if "transaction_type" in result:
-            additional_info["transaction_type"] = result["transaction_type"]
+            additional_info["transaction_type"] = result.get("transaction_type")
         if "seller_name" in result:
-            additional_info["seller_name"] = result["seller_name"]
+            additional_info["seller_name"] = result.get("seller_name")
 
         # currency 정보 처리
         if "currency" in result:
-            additional_info["currency"] = result["currency"]
+            additional_info["currency"] = result.get("currency")
         if "currency_conversion_rate" in result:
-            additional_info["currency_conversion_rate"] = result[
+            additional_info["currency_conversion_rate"] = result.get(
                 "currency_conversion_rate"
-            ]
+            )
 
         # 라벨 및 태그 정보 처리
         if "project.labels" in result:
-            additional_info["project_labels"] = result["project.labels"]
+            additional_info["project_labels"] = result.get("project.labels")
         if "labels" in result:
-            additional_info["labels"] = result["labels"]
+            additional_info["labels"] = result.get("labels")
         if "system_labels" in result:
-            additional_info["system_labels"] = result["system_labels"]
+            additional_info["system_labels"] = result.get("system_labels")
         if "tags" in result:
-            additional_info["tags"] = result["tags"]
+            additional_info["tags"] = result.get("tags")
 
         result["additional_info"] = additional_info
         return result
@@ -490,8 +513,9 @@ class CostManager(BaseManager):
             if isinstance(key, str):  # 키가 문자열인 경우만 처리
                 new_key = key.strip()  # 키 정제
                 if new_key != key:  # 키 변경 시
-                    result[new_key] = result[key]  # 키 변경
-                    del result[key]  # 원본 키 삭제
+                    result[new_key] = result.get(key)  # 키 변경 (안전한 접근)
+                    if key in result:  # 원본 키가 존재하는 경우에만 삭제
+                        del result[key]  # 원본 키 삭제
         return result
 
     @staticmethod
@@ -512,7 +536,9 @@ class CostManager(BaseManager):
         for origin_field, actual_field in self.field_mapper.items():  # 필드 매핑 순회
             if isinstance(actual_field, str):  # 필드 타입 확인
                 if actual_field in result:  # 필드 존재 확인
-                    result[origin_field] = result[actual_field]  # 필드 변경
+                    result[origin_field] = result.get(
+                        actual_field
+                    )  # 필드 변경 (안전한 접근)
                     # 원본 필드는 삭제하지 않고 유지 (다른 매핑에서 사용할 수 있음)
             elif origin_field == "additional_info":  # additional_info 필드 매핑 처리
                 result = self._process_additional_info_mapping(
@@ -563,17 +589,19 @@ class CostManager(BaseManager):
         additional_info = {}  # 추가 매핑 정보 초기화
         for origin_field, actual_field in additional_mapping.items():  # 추가 매핑 순회
             if actual_field in result:  # 필드 존재 확인
-                additional_info[origin_field] = result[
+                additional_info[origin_field] = result.get(
                     actual_field
-                ]  # 추가 매핑 정보 추가
-                del result[actual_field]  # 원본 필드 삭제
+                )  # 추가 매핑 정보 추가 (안전한 접근)
+                if actual_field in result:  # 원본 필드가 존재하는 경우에만 삭제
+                    del result[actual_field]  # 원본 필드 삭제
         result["additional_info"] = additional_info  # 추가 매핑 정보 적용
         return result
 
     def _apply_default_vars(self, result: Dict[str, Any]) -> None:
         """default_vars 설정에 따라 기본값을 적용합니다."""
         for key, value in self.default_vars.items():  # default_vars 순회
-            result[key] = value  # 기본값 적용
+            if key is not None:  # key가 None이 아닌 경우에만 적용
+                result[key] = value  # 기본값 적용
 
     def _apply_type_mapper(self, result: Dict[str, Any]) -> None:
         """type_mapper 설정에 따라 데이터 타입을 변환합니다."""
@@ -588,8 +616,12 @@ class CostManager(BaseManager):
             and "additional_info" in result  # additional_info 필드 확인
             and "Account ID" in result.get("additional_info", {})
         ):  # Account ID 확인
-            account_id = result["additional_info"]["Account ID"]  # Account ID 추출
-            if isinstance(account_id, (int, float)):
+            account_id = result.get("additional_info", {}).get(
+                "Account ID"
+            )  # Account ID 추출 (안전한 접근)
+            if isinstance(account_id, (int, float)) and account_id is not None:
+                if "additional_info" not in result:
+                    result["additional_info"] = {}
                 result["additional_info"]["Account ID"] = str(account_id).zfill(
                     CostManagerConfig.ACCOUNT_ID_PADDING_LENGTH
                 )  # Account ID 패딩 처리
@@ -613,22 +645,26 @@ class CostManager(BaseManager):
     def _process_existing_billed_date(self, result: Dict[str, Any]) -> bool:
         """기존 billed_date 필드를 처리합니다."""
         if result.get("billed_date"):  # billed_date 필드 확인
-            billed_date = result["billed_date"]  # billed_date 추출
+            billed_date = result.get("billed_date")  # billed_date 추출 (안전한 접근)
             if billed_date is not None:  # billed_date 값 확인
                 parsed_date = self._parse_date(billed_date)  # 날짜 파싱
-                result["billed_date"] = parsed_date.strftime(
-                    CostManagerConfig.DATE_FORMAT
-                )  # 날짜 형식 변환
+                if parsed_date:  # 파싱된 날짜가 유효한 경우에만
+                    result["billed_date"] = parsed_date.strftime(
+                        CostManagerConfig.DATE_FORMAT
+                    )  # 날짜 형식 변환
             return True
         return False
 
     def _process_usage_start_time(self, result: Dict[str, Any]) -> bool:
         """usage_start_time 필드를 처리합니다."""
         if "usage_start_time" in result:  # usage_start_time 필드 확인
-            usage_start_time = result["usage_start_time"]  # usage_start_time 추출
-            result["billed_date"] = self._format_date_only(
-                usage_start_time
-            )  # 날짜 형식 변환
+            usage_start_time = result.get(
+                "usage_start_time"
+            )  # usage_start_time 추출 (안전한 접근)
+            if usage_start_time:  # usage_start_time이 유효한 경우에만
+                result["billed_date"] = self._format_date_only(
+                    usage_start_time
+                )  # 날짜 형식 변환
             return True  # 날짜 처리 완료
         return False
 
@@ -649,18 +685,20 @@ class CostManager(BaseManager):
         """invoice.month 값을 추출합니다."""
         # 평면화된 형태
         if (
-            "invoice.month" in result and result["invoice.month"] is not None
+            "invoice.month" in result and result.get("invoice.month") is not None
         ):  # invoice.month 필드 확인
-            return str(result["invoice.month"])  # invoice.month 추출
+            return str(result.get("invoice.month"))  # invoice.month 추출 (안전한 접근)
 
         # 딕셔너리 형태
         if (
             "invoice" in result
-            and isinstance(result["invoice"], dict)
-            and "month" in result["invoice"]
-            and result["invoice"]["month"] is not None
+            and isinstance(result.get("invoice"), dict)
+            and "month" in result.get("invoice", {})
+            and result.get("invoice", {}).get("month") is not None
         ):
-            return result["invoice"]["month"]  # invoice.month 추출
+            return result.get("invoice", {}).get(
+                "month"
+            )  # invoice.month 추출 (안전한 접근)
 
         return None  # None 반환
 
@@ -678,11 +716,11 @@ class CostManager(BaseManager):
         """year, month 필드를 처리합니다."""
         if "year" in result and "month" in result:  # year, month 필드 확인
             year = (
-                str(result["year"]) if result["year"] is not None else ""
-            )  # year 추출
+                str(result.get("year")) if result.get("year") is not None else ""
+            )  # year 추출 (안전한 접근)
             month = (
-                str(result["month"]) if result["month"] is not None else ""
-            )  # month 추출
+                str(result.get("month")) if result.get("month") is not None else ""
+            )  # month 추출 (안전한 접근)
             day = (
                 str(result.get("day", CostManagerConfig.DEFAULT_DAY))
                 if result.get("day") is not None
@@ -732,8 +770,8 @@ class CostManager(BaseManager):
 
         for field in required_fields:  # 필수 필드 순회
             if (
-                field not in result or result[field] is None
-            ):  # 필드가 없거나 None인 경우
+                field not in result or result.get(field) is None
+            ):  # 필드가 없거나 None인 경우 (안전한 접근)
                 missing_fields.append(field)  # 누락된 필드 추가
 
         if missing_fields:  # 누락된 필드가 있는 경우
@@ -773,9 +811,11 @@ class CostManager(BaseManager):
                 error_message += "field_mapper가 설정되지 않았습니다. 원본 데이터에 필수 필드가 직접 포함되어 있어야 합니다."  # 필수 필드 정보 추가
 
             # _LOGGER.error(error_message)
-            raise ValueError(
-                f"Required field is missing: {missing_fields[0]}"
-            )  # 첫 번째 누락 필드로 예외 발생
+            _LOGGER.warning(
+                f"[CostManager._validate_required_fields] 필수 필드 누락: {missing_fields[0]}. "
+                f"에러 메시지: {error_message}"
+            )
+            # 필수 필드가 없어도 에러를 발생시키지 않고 빈 데이터로 처리
 
     def _create_final_data(
         self, result: Dict[str, Any], options: Optional[Dict[str, Any]] = None

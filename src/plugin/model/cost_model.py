@@ -19,7 +19,7 @@ class Cost(Model):
     비용 데이터를 표준화된 형태로 저장하기 위한 스키마를 정의합니다.
 
     Attributes:
-        cost (float): 실제 비용 금액 (필수)
+        cost (Decimal): 실제 비용 금액 (필수)
         usage_quantity (float): 사용량 수치 (필수)
         usage_type (str): 사용 유형 (예: Compute, Storage, Network)
         usage_unit (str): 사용량 단위 (예: GB, hours, requests)
@@ -117,7 +117,7 @@ class GoogleCloudBillingCost(Cost):
         credits (list): 크레딧 정보 리스트
         adjustment_info (dict): 조정 정보
         export_time (str): 내보내기 시간
-        cost_at_list (float): 정가 비용
+        cost_at_list (Decimal): 정가 비용
         transaction_type (str): 거래 유형
         seller_name (str): 판매자 이름
     """

@@ -10,6 +10,7 @@ HTTP 파일이나 Google Cloud Storage에서 읽어온 비용 데이터를 Space
 """
 
 import logging
+from decimal import Decimal
 
 from spaceone.api.cost_analysis.plugin import cost_pb2
 from spaceone.core.pygrpc.message_type import change_struct_type
@@ -49,11 +50,15 @@ def cost_info(cost_data):
         # cost와 usage_quantity는 숫자 타입으로 변환
         cost_value = cost_data["cost"]
         if isinstance(cost_value, str):
-            cost_value = float(cost_value)
+            cost_value = Decimal(cost_value)
+        elif isinstance(cost_value, (int, float)):
+            cost_value = Decimal(str(cost_value))
 
         usage_quantity_value = cost_data["usage_quantity"]
         if isinstance(usage_quantity_value, str):
-            usage_quantity_value = float(usage_quantity_value)
+            usage_quantity_value = Decimal(usage_quantity_value)
+        elif isinstance(usage_quantity_value, (int, float)):
+            usage_quantity_value = Decimal(str(usage_quantity_value))
 
         info = {
             "cost": cost_value,  # 비용 금액 (필수 필드) - 숫자 타입으로 변환

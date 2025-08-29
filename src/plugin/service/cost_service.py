@@ -1,6 +1,14 @@
 import logging
 
-from spaceone.core.service import *
+from spaceone.core.service import (
+    BaseService,
+    authentication_handler,
+    authorization_handler,
+    check_required,
+    event_handler,
+    transaction,
+)
+
 from plugin.manager.cost_manager import CostManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -12,14 +20,15 @@ _LOGGER = logging.getLogger(__name__)
 class CostService(BaseService):
     """
     비용 데이터 수집 서비스 클래스
-    
+
     HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집하고 처리하는 서비스입니다.
     SpaceONE의 BaseService를 상속받아 표준화된 서비스 구조를 따릅니다.
-    
+
     주요 기능:
     - get_data: 비용 데이터 수집 및 스트리밍
     - get_linked_accounts: 연결된 계정 정보 조회
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cost_mgr: CostManager = self.locator.get_manager(CostManager)
@@ -28,7 +37,7 @@ class CostService(BaseService):
     @check_required(["options", "secret_data", "task_options"])
     def get_data(self, params):
         """비용 데이터를 수집하고 반환하는 메서드
-        
+
         HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집하여
         SpaceONE에서 요구하는 포맷으로 변환하여 제너레이터로 반환합니다.
 
@@ -48,13 +57,31 @@ class CostService(BaseService):
         schema = params.get("schema")
         task_options = params["task_options"]
 
+        # 데이터 소스 정보 검증
+        has_base_url = (
+            "base_url" in task_options or "base_url" in options
+        )  # base_url 존재 여부 확인
+        has_bucket_name = "bucket_name" in task_options  # bucket_name 존재 여부 확인
+
+        # 빈 options와 task_options가 올 때는 빈 제너레이터 반환
+        if not (has_base_url or has_bucket_name):
+            _LOGGER.warning(
+                "[CostService.get_data] 데이터 소스 정보가 없습니다. 빈 응답을 반환합니다."
+            )
+
+            # 빈 결과를 가진 제너레이터 반환
+            def empty_generator():
+                yield {"results": []}
+
+            return empty_generator()
+
         return self.cost_mgr.get_data(options, secret_data, schema, task_options)
 
     @transaction
     @check_required(["options", "secret_data"])
     def get_linked_accounts(self, params):
         """연결된 계정(Linked Accounts) 정보를 조회하는 메서드
-        
+
         HTTP 파일이나 Google Cloud Storage에서 비용 데이터를 수집할 때
         연결된 계정들의 목록을 반환합니다. 이 정보는 SpaceONE에서
         계정별 비용 분석을 위해 사용됩니다.

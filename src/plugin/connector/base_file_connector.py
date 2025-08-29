@@ -23,6 +23,7 @@ from plugin.error.cost import (
     ERROR_NO_DATA_FOUND,  # 파싱 후 데이터가 없는 경우
     ERROR_NO_DATA_ROWS,  # 데이터 행이 없는 경우
 )
+from plugin.validation.payload_validator import PayloadValidator
 
 # 공통 상수 정의
 PAGE_SIZE = 1000  # 페이지 크기
@@ -970,11 +971,11 @@ class BaseFileConnector(BaseConnector):
     @staticmethod
     def download_file_from_url(url: str, timeout: int = None) -> bytes:
         """
-        URL에서 파일을 다운로드
+        URL에서 파일을 다운로드 (보안 강화)
 
         Args:
             url: 파일 URL
-            timeout: 타임아웃 시간 (초, None이면 무제한)
+            timeout: 타임아웃 시간 (초, None이면 기본값 30초 사용)
 
         Returns:
             bytes: 다운로드된 파일 내용
@@ -983,34 +984,78 @@ class BaseFileConnector(BaseConnector):
             ERROR_FILE_DOWNLOAD_FAILED: 파일 다운로드 실패 시
             ERROR_EMPTY_FILE: 파일이 비어있는 경우
         """
+        # URL 검증
         try:
+            validated_url = PayloadValidator._validate_single_url(url)
+        except Exception as e:
+            _LOGGER.error(f"URL 검증 실패: {e}")
+            raise ERROR_FILE_DOWNLOAD_FAILED(file_path=url) from e
+
+        # 기본 타임아웃 설정 (보안 강화)
+        if timeout is None:
+            timeout = 30  # 기본 30초 타임아웃
+        elif timeout > 300:  # 최대 5분 제한
+            timeout = 300
+
+        try:
+            # 보안 강화: User-Agent 설정 및 스트리밍 다운로드
+            headers = {"User-Agent": "SpaceONE-HTTP-File-Cost-DataSource/1.1.21"}
+
             response = requests.get(
-                url, timeout=timeout
-            )  # GET 요청 실행 (timeout 제거)
+                validated_url,
+                timeout=timeout,
+                headers=headers,
+                stream=True,  # 스트리밍 다운로드로 메모리 효율성 향상
+            )
             response.raise_for_status()  # 요청 상태 확인
 
-            content_length = len(response.content)  # 파일 내용 길이 확인
-            if content_length == 0:  # 파일 내용이 비어있는 경우
+            # Content-Length 헤더로 파일 크기 사전 확인
+            content_length = response.headers.get("content-length")
+            if content_length:
+                content_length = int(content_length)
+                if content_length > PayloadValidator.MAX_FILE_SIZE:
+                    raise ERROR_FILE_DOWNLOAD_FAILED(file_path=validated_url)
+                if content_length == 0:
+                    raise ERROR_EMPTY_FILE(file_path=validated_url)
+
+            # 실제 콘텐츠를 청크 단위로 다운로드하며 크기 제한
+            content = b""
+            downloaded_size = 0
+
+            for chunk in response.iter_content(chunk_size=8192):  # 8KB 청크
+                if chunk:  # 빈 청크 필터링
+                    downloaded_size += len(chunk)
+
+                    # 다운로드 중 파일 크기 제한 확인
+                    if downloaded_size > PayloadValidator.MAX_FILE_SIZE:
+                        raise ERROR_FILE_DOWNLOAD_FAILED(file_path=validated_url)
+
+                    content += chunk
+
+            # 다운로드 완료 후 검증
+            if len(content) == 0:
                 _LOGGER.error(
-                    f"File is empty (content length 0): {url}"
-                )  # 파일이 비어있는 경우 로깅
-                raise ERROR_EMPTY_FILE(file_path=url)  # 파일이 비어있는 경우 오류 발생
+                    f"파일이 비어있습니다 (content length 0): {validated_url}"
+                )
+                raise ERROR_EMPTY_FILE(file_path=validated_url)
 
-            if not response.content.strip():  # 파일 내용이 비어있는 경우
+            if not content.strip():
                 _LOGGER.error(
-                    f"File is empty (no content after strip): {url}"
-                )  # 파일이 비어있는 경우 로깅
-                raise ERROR_EMPTY_FILE(file_path=url)  # 파일이 비어있는 경우 오류 발생
+                    f"파일이 비어있습니다 (no content after strip): {validated_url}"
+                )
+                raise ERROR_EMPTY_FILE(file_path=validated_url)
 
-            return response.content  # 파일 내용 반환
+            _LOGGER.info(f"파일 다운로드 완료: {validated_url} ({len(content)} bytes)")
+            return content
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.Timeout as e:
             _LOGGER.error(
-                f"Failed to download file from {url}: {e}"
-            )  # 파일 다운로드 실패 로깅
-            raise ERROR_FILE_DOWNLOAD_FAILED(
-                file_path=url
-            ) from e  # 파일 다운로드 실패 오류 발생
+                f"파일 다운로드 타임아웃: {validated_url} (timeout: {timeout}s)"
+            )
+            raise ERROR_FILE_DOWNLOAD_FAILED(file_path=validated_url) from e
+        except requests.exceptions.RequestException as e:
+            _LOGGER.error(f"파일 다운로드 실패: {validated_url}: {e}")
+            raise ERROR_FILE_DOWNLOAD_FAILED(file_path=validated_url) from e
 
     def _ensure_only_dict_records_final(
         self, costs_data: list, source_file: str

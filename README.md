@@ -1,451 +1,156 @@
 # plugin-http-file-cost-datasource
 
-* Plugin for collecting cost data from **CSV, JSON, and Parquet files**
-* Plugin for collecting cost data from **HTTP files and Google Cloud Storage**
-* Plugin for collecting cost data from **Google Cloud Billing Export**
-* Plugin for retrieving **linked accounts information**
+SpaceONE의 비용 분석(cost-analysis) 서비스에서 사용하는 플러그인으로, 다양한 소스로부터 비용 데이터를 수집합니다.
+
+- **주요 기능**: CSV, JSON, Parquet 형식의 파일에서 비용 데이터를 수집합니다.
+- **지원 소스**: HTTP/HTTPS URL, Google Cloud Storage, Google Cloud Billing Export
+- **특징**: 연결된 계정 정보 조회 및 다양한 파일 포맷 자동 감지
 
 ---
 
-## 1) Overview
+## 목차
+1.  [개요](#1-개요)
+2.  [지원 파일 형식](#2-지원-파일-형식)
+3.  [플러그인 옵션](#3-플러그인-옵션)
+4.  [CI/CD 및 품질 관리](#4-cicd-및-품질-관리)
+5.  [사용 방법 (Deprecated)](#5-사용-방법-deprecated)
+6.  [문제 해결](#6-문제-해결)
+7.  [연결 계정(Linked Accounts) 기능](#7-연결-계정linked-accounts-기능)
 
-This plugin is a plugin that collects cost data from CSV, JSON, and Parquet files.  
-The files must be in the format specified in the [2) File format](#2-file-format) section.  
+---
 
-The plugin supports multiple data sources:
-- **HTTP Files**: CSV, JSON, and Parquet files located on web servers
-- **Google Cloud Storage**: Files stored in Google Cloud Storage buckets
-- **Google Cloud Billing Export**: Standard usage cost data exported from Google Cloud Billing
-- **Linked Accounts**: Retrieval of connected account information for cost analysis
+## 1. 개요
 
-The CSV file must be located on the web server,  
-and the URL must be specified in the [3) options of the plugin](#3-options-of-plugin).  
+이 플러그인은 CSV, JSON, Parquet 형식의 파일로부터 비용 데이터를 수집하여 SpaceONE 비용 분석 서비스와 연동하는 것을 목표로 합니다. 파일은 웹 서버(HTTP/HTTPS) 또는 Google Cloud Storage에 위치할 수 있으며, Google Cloud Billing Export에서 직접 데이터를 가져오는 기능도 지원합니다.
 
-If you have completed understanding the steps 2) and 3),  
-you can check the actual usage in [4) How to use](#4-how-to-use).
+파일 형식과 플러그인 옵션에 대한 자세한 내용은 아래 섹션을 참고해 주십시오.
 
-## 2) File format
+## 2. 지원 파일 형식
 
 ![img.png](examples/img.png)
+*위 이미지는 CSV 파일의 예시입니다.*
 
-* The above is an example of a csv file, and the fields that exist in the csv must exist.  
-* Here is a list of available fields. Of these, `cost` fields are required field.  
-* The required date fields are:  
-  * If there is a `billed_date` (ex. "2023-09-01") field, it works even if there are no `year` and `month` fields.
-  * This works if there is no `billed_date` field and there are `year`, `month`, and `day` fields.
-  * If there is no `billed_date` field and there are `year` and `month`, `day` is applied as 1 day.
-  * Does not work except for the above cases.
+### 2.1. 필수 및 선택 필드
+- **필수 필드**: `cost`
+- **날짜 필드 (아래 조건 중 하나 충족)**: 
+  1. `billed_date` 필드 (예: "2023-09-01")
+  2. `year`, `month`, `day` 필드
+  3. `year`, `month` 필드 (이 경우 `day`는 1일로 자동 설정)
+- **선택 필드**: `usage_quantity`, `usage_type`, `provider`, `region_code`, `product` 등
 
-### Supported File Formats
+### 2.2. 지원 포맷 상세
 
-#### CSV Files
-* **Delimiters**: The plugin automatically detects common delimiters including comma (,), semicolon (;), tab (\t), and pipe (|)
-* **Encoding**: UTF-8, UTF-8-BOM, and other encodings are automatically detected
-* **Headers**: CSV files must have a header row with column names
-* **Data Requirements**: Files must contain at least one data row (not just headers)
+#### CSV 파일
+- **구분자**: 쉼표(,), 세미콜론(;), 탭(\t), 파이프(|)를 자동으로 감지합니다.
+- **인코딩**: UTF-8, UTF-8-BOM 등 다양한 인코딩을 자동으로 감지합니다.
+- **헤더**: 반드시 헤더 행(컬럼명)이 존재해야 합니다.
 
-#### JSON Files
-* **Format**: Supports JSON Lines (JSONL) format where each line is a separate JSON object
-* **Encoding**: UTF-8 encoding is supported
-* **Structure**: Each JSON object should contain the required cost fields
+#### JSON 파일
+- **형식**: 각 줄이 개별 JSON 객체인 JSON Lines(JSONL) 형식을 지원합니다.
+- **인코딩**: UTF-8을 지원합니다.
 
-#### Parquet Files
-* **Engines**: Supports both pyarrow and fastparquet engines
-* **Dependencies**: Requires either pyarrow or fastparquet to be installed
-* **Installation**: `pip install pyarrow fastparquet` (both are included in requirements.txt)
-* **Performance**: Parquet files offer better compression and faster reading for large datasets
-* **Compressed Formats**: Supports various compressed Parquet formats:
-  - `.parquet.gz` - Gzip compressed Parquet files
-  - `.parquet.snappy` - Snappy compressed Parquet files
-  - `.parquet.zst` - Zstandard compressed Parquet files
-  - `.parquet.sz` - Snappy compressed Parquet files (alternative extension)
-  - `.parquet.zstd` - Zstandard compressed Parquet files (alternative extension)
+#### Parquet 파일
+- **엔진**: `pyarrow`와 `fastparquet` 엔진을 모두 지원합니다.
+- **압축 형식**: `.parquet.gz`, `.parquet.snappy`, `.parquet.zst` 등 다양한 압축 포맷을 지원합니다.
 
-### Error Handling
+### 2.3. Google Cloud Billing Export 필드
+Google Cloud Billing Export 데이터의 경우, `billing_account_id`, `service.id`, `project.name` 등 표준 빌링 필드를 지원합니다. 상세 필드 매핑 정보는 [Google Cloud Billing Integration Guide](docs/ko/Google%20Cloud%20Billing%20Integration.md) 문서를 참고하십시오.
 
-The plugin includes robust error handling for common file parsing issues:
+---
 
-* **Empty Files**: Returns clear error message when files contain no data
-* **Missing Headers**: Detects and reports files without proper column headers
-* **Invalid Delimiters**: Automatically detects and uses appropriate delimiters
-* **Encoding Issues**: Handles various character encodings gracefully
-* **Malformed Data**: Skips bad lines and continues processing valid data
-* **File Download Issues**: Validates file downloads and reports failures
-* **Temporary File Management**: Automatically cleans up temporary files after processing
-* **Filename Sanitization**: Handles special characters and long filenames safely
-* **Parquet Dependencies**: Provides clear installation instructions when pyarrow/fastparquet are missing
-* **Engine Fallback**: Automatically tries alternative engines if one fails
+## 3. 플러그인 옵션
 
-### Recent Improvements
-
-The plugin has been enhanced with better file handling capabilities:
-
-* **Enhanced File Validation**: 
-  - Validates file downloads before processing
-  - Checks file size to ensure non-empty files
-  - Provides detailed error messages for file-related issues
-
-* **Improved Filename Handling**:
-  - Safely handles filenames with special characters
-  - Uses hash-based naming for very long filenames
-  - Prevents file system compatibility issues
-
-* **Automatic Resource Cleanup**:
-  - Automatically removes temporary files after processing
-  - Prevents disk space accumulation
-  - Includes error handling for cleanup operations
-
-* **Better Error Reporting**:
-  - More specific error messages for different failure scenarios
-  - Detailed logging for debugging file processing issues
-  - Clear distinction between different types of file errors
-
-* **Compressed Parquet Support**:
-  - Added support for compressed Parquet file formats
-  - Automatically detects and processes `.parquet.gz`, `.parquet.snappy`, `.parquet.zst`, `.parquet.sz`, `.parquet.zstd` files
-  - Maintains backward compatibility with uncompressed `.parquet` files
-  - Works with both Google Cloud Storage and HTTP file connectors
-
-<br>
-
-* **cost (required)**
-* **billed_date (required)**
-* **year (required)**
-* **month (required)**
-* **day (optional)**
-* usage_quantity
-* usage_type
-* provider
-* region_code
-* product
-
-### Google Cloud Billing Export Fields
-
-For Google Cloud Billing Export data, the following additional fields are supported:
-
-* **billing_account_id**: Cloud Billing account ID
-* **service.id**, **service.description**: Service information
-* **sku.id**, **sku.description**: SKU information
-* **project.id**, **project.name**: Project information
-* **location.location**, **location.region**, **location.zone**: Location information
-* **usage_start_time**, **usage_end_time**: Usage time information
-* **invoice.month**: Invoice month (YYYYMM format)
-* **credits**: Credit information
-* **tags**, **labels**: Tags and labels information
-
-For detailed field mapping and configuration, see [Google Cloud Billing Integration Guide](docs/ko/Google%20Cloud%20Billing%20Integration.md).
-
-## 3) Options of plugin
-
-* The following options are available for the plugin.
-* The options are specified in the form of a YAML file.
-* You can find out how yaml is used in [4) How to use](#4-how-to-use) section.
-* An example using all options is shown below.
-  ```yaml
-  # update_data_source_options.yml
-  ---
-  options:
-    base_url:
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/cost_example.csv
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/custom_cost_example.csv
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/example_with_billed_at.csv
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/examples_of_different_headers.csv
-    field_mapper:
-      cost: TotalCost
-      currency: CurrencyCode
-      day: Day
-      month: Month
-      provider: Provider
-      usage_quantity: UsageQuantity
-      usage_type: UsageType
-      year: Year
-    default_vars:
-      currency: KRW
-    billed_at: UsageStartDate
-  ```
-
-**base_url (required)**
-
-* The URL of the CSV file to be used.
-* The URL must be a list type.
+플러그인 옵션은 YAML 형식으로 지정하며, 데이터 소스를 등록하거나 업데이트할 때 사용합니다.
 
 ```yaml
+# update_data_source_options.yml 예시
 ---
 options:
   base_url:
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/cost_example.csv
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/custom_cost_example.csv
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/example_with_billed_at.csv
-    - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/examples_of_different_headers.csv
-```
-
-**field_mapper (optional)**
-
-* The field name of the CSV file to be used.
-* If you do not specify this option, the [default column](#2-csv-format) is used.
-* As you can see in [examples_of_different_headers.csv](examples/examples_of_different_headers.csv), if the column names
-  are different, you can use these options to map them.
-
-```yaml
----
-options:
+    - https://.../cost_example.csv
   field_mapper:
     cost: TotalCost
     currency: CurrencyCode
-    day: Day
-    month: Month
-    provider: Provider
-    usage_quantity: UsageQuantity
-    usage_type: UsageType
-    year: Year
-```
-
-**default_vars (optional)**
-
-* If you want to set a default value for a field, you can use this option.
-* If you do not specify this option, the [default column](#2-csv-format) is used.
-* As you can see in [example_of_default_vars.csv](examples/example_of_default_vars.csv), This can be used if you want to
-  default all currencies to KRW.
-
-```yaml
----
-options:
   default_vars:
     currency: KRW
 ```
 
-**Google Cloud Storage (optional)**
-
-* For Google Cloud Storage data sources, specify the bucket name and provide Service Account credentials.
-* See [Google Cloud Billing Integration Guide](docs/ko/Google%20Cloud%20Billing%20Integration.md) for detailed configuration.
-
-```yaml
----
-options:
-  bucket_name: "your-billing-export-bucket"
-  provider: "google_cloud"
-  field_mapper:
-    cost: "cost"
-    billed_date: "usage_start_time"
-    additional_info:
-      billing_account_id: "billing_account_id"
-      service_id: "service.id"
-      project_id: "project.id"
-
-secret_data:
-  type: "service_account"
-  project_id: "your-project-id"
-  private_key: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-  client_email: "your-service-account@your-project.iam.gserviceaccount.com"
-```
-
-## 4) How to use (Deprecated)
-
-In order to use the plugin, how to use [spacectl CLI tools](https://github.com/cloudforet-io/spacectl) must be preceded.
-
-1. Check if the plugin you want to use from the marketplace exists.
-
-```shell
-$ spacectl list repository.Plugin -p service_type=cost_analysis.DataSource --minimal
-
-plugin_id                        | name                                | image                                     | state   | service_type             | registry_type
-----------------------------------+-------------------------------------+-------------------------------------------+---------+--------------------------+-----------------
-plugin-http-file-cost-datasource | HTTP file Cost Analysis Data Source | pyengine/plugin-http-file-cost-datasource | ENABLED | cost_analysis.DataSource | DOCKER_HUB
-```
-
-2. Register with the DataSource resource of cost-analysis.
-
-```shell
-$ spacectl exec register cost-analysis.DataSource -f register_data_source.yml
-```
-
-```yaml
-# register_data_source.yml
----
-name: HTTP File Data Source
-service_type: EXTERNAL
-image: pyengine/plugin-http-file-cost-datasource
-tags: { }
-template: { }
-```
-
-3. Check the registered CSV Plugin information.
-
-```shell
-$ spacectl exec get cost-analysis.DataSource -p data_source_id=<data_source_id>
+- **`base_url` (필수)**: 비용 데이터 파일의 URL 목록입니다.
+- **`field_mapper` (선택)**: 파일의 컬럼명이 표준 필드와 다를 경우 매핑 정보를 지정합니다.
+- **`default_vars` (선택)**: 특정 필드에 기본값을 설정하고 싶을 때 사용합니다.
+- **Google Cloud Storage (선택)**: `bucket_name`, `provider` 등의 옵션과 `secret_data`를 통해 GCS 연동을 설정합니다.
 
 ---
-created_at: '2023-02-06T11:04:34.348Z'
-data_source_id: ds-123456789012
-data_source_type: EXTERNAL
-domain_id: domain-123456789012
-last_synchronized_at: '2023-02-06T16:00:08.356Z'
-name: HTTP File Data Source
-plugin_info:
-  metadata:
-    data_source_rules:
-    - actions:
-        match_service_account:
-          source: account
-          target: data.account
-      conditions: []
-      conditions_policy: ALWAYS
-      name: match_service_account
-      options:
-        stop_processing: true
-      tags: {}
-  plugin_id: plugin-http-file-cost-datasource
-  upgrade_mode: AUTO
-  version: 1.0.0.20230206.225536
-state: ENABLED
-tags: {}
-template: {}
-```
 
-4. Sets the options corresponding to the url where the csv file is located in the plugin.
+## 4. CI/CD 및 품질 관리
 
-```shell
-$ spacectl exec update_plugin cost-analysis.DataSource -p data_source_id=<data_source_id> -f update_data_source_options.yml
-```
+이 프로젝트는 GitHub Actions를 통한 자동화된 검증과 개발자 로컬 환경에서의 수동 검증을 통해 코드의 품질과 안정성을 유지합니다.
 
-```yaml
-# update_data_source_options.yml
+### 4.1. 로컬 개발 환경에서의 품질 관리
+
+Pull Request를 생성하기 전, 모든 개발자는 로컬 환경에서 다음 절차를 통해 코드 품질을 **반드시** 검증해야 합니다.
+
+1.  **린트 검사 및 포맷팅**: `Ruff`를 사용하여 코드 스타일을 검사하고 수정합니다.
+    ```bash
+    # 린트 검사 및 자동 수정
+    ruff check src/ --fix
+    
+    # 포맷팅 적용
+    ruff format src/
+    ```
+
+2.  **단위 및 통합 테스트**: `pytest`를 실행하여 모든 테스트가 통과(`PASSED`)하는지 확인합니다.
+    ```bash
+    pytest
+    ```
+상세한 규칙은 `.cursor/rules/project-rules.mdc` 문서를 참고하십시오.
+
+### 4.2. 자동화된 검증 프로세스
+GitHub Actions를 통해 CI/CD 파이프라인이 운영되며, 주요 절차는 다음과 같습니다.
+
+1.  **커밋 서명 확인**: 모든 커밋은 DCO(Developer Certificate of Origin)를 준수하기 위해 서명되어야 합니다.
+2.  **도커 이미지 빌드**: 변경 사항이 적용된 플러그인 실행 환경을 도커 이미지로 빌드합니다.
+3.  **보안 취약점 스캔**: 빌드된 도커 이미지를 대상으로 `Trivy`를 사용하여 알려진 보안 취약점을 검사합니다.
+
+이러한 자동화된 검증 절차는 모든 Pull Request와 코드 변경에 적용되어 프로젝트의 신뢰성을 보장합니다.
+
 ---
-options:
-  base_url:
-  - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/cost_example.csv
-  - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/custom_cost_example.csv
-  - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/example_with_billed_at.csv
-  - https://raw.githubusercontent.com/cloudforet-io/plugin-http-file-cost-datasource/master/examples/examples_of_different_headers.csv
-  field_mapper:
-    cost: TotalCost
-    currency: CurrencyCode
-    day: Day
-    month: Month
-    provider: Provider
-    usage_quantity: UsageQuantity
-    usage_type: UsageType
-    year: Year
-  default_vars:
-    currency: KRW
-  billed_at: UsageStartDate
-```
 
-5. Manually sync the cost information of the csv file in step 4.
+## 5. 사용 방법 (Deprecated)
 
-```shell
-$ spacectl exec sync cost-analysis.DataSource -p data_source_id=<data_source_id>
-```
+> [!WARNING]
+> 아래의 `spacectl` CLI를 이용한 방법은 예전 방식이며, 현재는 SpaceONE 콘솔을 통한 데이터 소스 설정을 권장합니다.
 
-## 5) Troubleshooting
+[spacectl CLI tools](https://github.com/cloudforet-io/spacectl)을 사용하여 플러그인을 등록하고 설정할 수 있습니다.
 
-### Common Error Messages and Solutions
+1.  **플러그인 조회**
+2.  **데이터 소스 등록**
+3.  **플러그인 옵션 설정**
+4.  **데이터 동기화**
 
-#### ERROR_EMPTY_FILE: File is empty
-**Cause**: The downloaded file contains no data or has zero bytes. This can occur due to:
-- Empty blob in Google Cloud Storage
-- Failed file download
-- Corrupted file during transfer
-- File path issues with special characters
+---
 
-**Solution**: 
-- Check if the source file actually contains data
-- Verify the URL is accessible and returns content
-- Ensure the file format is supported (CSV or JSON)
-- Check the blob size in Google Cloud Storage
-- Verify file permissions and access rights
-- Look for detailed error logs that include blob information and file paths
+## 6. 문제 해결
 
-#### ERROR_NO_DATA_ROWS: File has no data rows
-**Cause**: The file contains only headers or is malformed.
-**Solution**:
-- Verify the file has at least one data row after the header
-- Check if the file format is correct
-- Ensure proper line endings
+### 주요 에러 메시지 및 해결 방안
 
-#### ERROR_EMPTY_HEADER: Empty header line
-**Cause**: The first line of the file is empty or contains only whitespace.
-**Solution**:
-- Check the file structure and ensure the first line contains column headers
-- Remove any empty lines at the beginning of the file
+- **`ERROR_EMPTY_FILE`**: 파일이 비어있거나 다운로드에 실패했습니다. 소스 파일의 내용과 접근 권한을 확인하십시오.
+- **`ERROR_NO_DATA_ROWS`**: 파일에 헤더만 있고 데이터 행이 없습니다. 파일 내용을 확인하십시오.
+- **`ERROR_CSV_PARSING`**: CSV 파일 형식이 잘못되었습니다. 구분자, 인코딩, 파일 손상 여부를 확인하십시오.
 
-#### ERROR_NO_DATA_FOUND: No data found in CSV file
-**Cause**: The file was parsed but no valid data records were found.
-**Solution**:
-- Verify the file contains valid data rows
-- Check for encoding issues
-- Ensure the delimiter is correctly detected
+### 디버깅 팁
+- 플러그인 로그에서 상세한 에러 메시지를 확인합니다.
+- 파일 URL 또는 GCS 버킷에 대한 접근성을 확인합니다.
+- 파일을 직접 열어 형식과 인코딩이 올바른지 검사합니다.
 
-#### ERROR_NO_COLUMNS: No columns to parse from file
-**Cause**: The file has no recognizable column structure.
-**Solution**:
-- Check if the file is in the correct format
-- Verify the delimiter is supported (comma, semicolon, tab, pipe)
-- Ensure the file is not corrupted
+---
 
-#### ERROR_CSV_PARSING: CSV parsing error
-**Cause**: The file format is not compatible with CSV parsing.
-**Solution**:
-- Check if the file is actually a CSV file
-- Verify the encoding (UTF-8 recommended)
-- Look for malformed lines or special characters
+## 7. 연결 계정(Linked Accounts) 기능
 
-### Debugging Tips
+### 개요
+여러 클라우드 계정의 비용을 통합 분석하기 위해 데이터 소스에 연결된 계정 정보를 조회하는 기능입니다.
 
-1. **Check Logs**: Look for detailed error messages in the plugin logs that now include:
-   - Blob information (size, content type, name)
-   - File path details and safe filename generation
-   - Download status and file existence checks
-   - Temp directory information
+### 현황 및 향후 계획
+- **현재**: 기능의 기본 구조와 gRPC 인터페이스가 구현되어 있습니다.
+- **향후**: 각 데이터 소스(HTTP 파일, GCS)의 특성에 맞는 계정 정보 추출 로직을 구체화하고, 캐싱 및 에러 처리 기능을 고도화할 예정입니다.
 
-2. **Verify File Access**: Ensure the plugin can access the file URL or Google Cloud Storage bucket
-
-3. **Test File Format**: Try opening the file in a text editor to verify its structure
-
-4. **Check File Size**: Ensure the file is not empty or corrupted
-
-5. **Validate Encoding**: Make sure the file uses a supported encoding (UTF-8 recommended)
-
-6. **Google Cloud Storage Specific**:
-   - Verify blob exists and has content
-   - Check bucket permissions and access rights
-   - Ensure blob name doesn't contain problematic characters
-   - Verify the blob is not a directory marker
-
-7. **File Path Issues**: 
-   - Check for special characters in file names
-   - Verify temp directory permissions
-   - Look for path length limitations
-
-## 6) Linked Accounts Feature
-
-### Overview
-The plugin provides a `get_linked_accounts` feature that retrieves information about connected accounts for cost analysis purposes. This feature is essential for multi-account environments where costs need to be analyzed across different accounts.
-
-### Functionality
-- **Account Discovery**: Automatically discovers connected accounts from the data source
-- **Account Information**: Retrieves account ID and name for each connected account
-- **Multi-Source Support**: Works with both HTTP files and Google Cloud Storage
-- **SpaceONE Integration**: Provides account information in SpaceONE-compatible format
-
-### Usage
-The `get_linked_accounts` function is called automatically by SpaceONE when:
-- Setting up cost analysis data sources
-- Configuring account-based cost reporting
-- Managing multi-account cost visibility
-
-### Implementation Status
-**Current Status**: Basic structure implemented with placeholder functionality
-- ✅ Function signature and gRPC interface defined
-- ✅ Service layer implementation completed
-- ✅ Protobuf message types defined
-- ⚠️ Data source-specific account extraction logic needs implementation
-- ⚠️ HTTP file account parsing logic needs implementation
-- ⚠️ Google Cloud Storage account extraction logic needs implementation
-
-### Future Enhancements
-- **HTTP File Account Extraction**: Parse account information from CSV/JSON headers or data
-- **Google Cloud Storage Account Discovery**: Extract account information from bucket metadata
-- **Account Validation**: Validate account information against cloud provider APIs
-- **Caching**: Implement account information caching for performance
-- **Error Handling**: Enhanced error handling for account discovery failures

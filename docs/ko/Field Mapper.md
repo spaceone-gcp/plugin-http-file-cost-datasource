@@ -171,7 +171,12 @@ field_mapper 설정:
     "currency": "currency",
     "billed_date": "usage_start_time",
     "product": "service.description",
-    "region_code": "location.region"
+    "region_code": "location.region",
+    "additional_info": {
+      "cost_at_list": "cost_at_list",
+      "project_id": "project.id",
+      "credits": "credits"
+    }
   }
 }
 ```
