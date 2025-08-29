@@ -1,7 +1,7 @@
 import functools
 
 from spaceone.api.cost_analysis.plugin import job_pb2
-from spaceone.core.pygrpc.message_type import *
+from spaceone.core.pygrpc.message_type import change_struct_type
 
 __all__ = ["task_info", "tasks_info", "changed_info"]
 

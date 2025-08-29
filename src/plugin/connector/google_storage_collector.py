@@ -45,17 +45,24 @@ class GoogleStorageConnector(BaseFileConnector):
         """
         super().__init__(*args, **kwargs)  # 베이스 클래스 초기화
 
-        self.secret_data = kwargs.get("secret_data")  # 시크릿 데이터 설정
+        self.secret_data = kwargs.get(
+            "secret_data", {}
+        )  # 시크릿 데이터 설정 (안전한 접근)
         self.project_id = self.secret_data.get("project_id")  # 프로젝트 ID 설정
-        self.credentials = (
-            google.oauth2.service_account.Credentials.from_service_account_info(
-                self.secret_data  # 시크릿 데이터 설정
+        # secret_data가 유효한 경우에만 credentials 생성
+        if self.secret_data and self.project_id:
+            self.credentials = (
+                google.oauth2.service_account.Credentials.from_service_account_info(
+                    self.secret_data  # 시크릿 데이터 설정
+                )
             )
-        )
-        self.client = storage.Client(
-            project=self.secret_data["project_id"],
-            credentials=self.credentials,  # 프로젝트 ID 설정
-        )
+            self.client = storage.Client(
+                project=self.project_id,
+                credentials=self.credentials,  # 프로젝트 ID 설정
+            )
+        else:
+            self.credentials = None
+            self.client = None
         # Client timeout 설정 제거 (무제한)
         self.client._connection.timeout = None
 
@@ -73,16 +80,25 @@ class GoogleStorageConnector(BaseFileConnector):
         # secret_data가 제공된 경우 자격 증명 업데이트
         if secret_data:
             self.secret_data = secret_data  # 시크릿 데이터 설정
-            self.project_id = secret_data.get("project_id")  # 프로젝트 ID 설정
-            self.credentials = (
-                google.oauth2.service_account.Credentials.from_service_account_info(
-                    secret_data  # 시크릿 데이터 설정
+            self.project_id = secret_data.get(
+                "project_id"
+            )  # 프로젝트 ID 설정 (안전한 접근)
+
+            # project_id가 유효한 경우에만 credentials 생성
+            if self.project_id:
+                self.credentials = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        secret_data  # 시크릿 데이터 설정
+                    )
                 )
-            )
-            self.client = storage.Client(
-                project=secret_data["project_id"],
-                credentials=self.credentials,  # 프로젝트 ID 설정
-            )
+                self.client = storage.Client(
+                    project=self.project_id,
+                    credentials=self.credentials,  # 프로젝트 ID 설정
+                )
+            else:
+                from spaceone.core.error import ERROR_REQUIRED_PARAMETER
+
+                raise ERROR_REQUIRED_PARAMETER(key="project_id")
             # Client timeout 설정 제거 (무제한)
             self.client._connection.timeout = None
 
@@ -106,12 +122,21 @@ class GoogleStorageConnector(BaseFileConnector):
             ERROR_FILE_DOWNLOAD_FAILED: 파일 다운로드 실패 시
             ERROR_UNKNOWN: 기타 알 수 없는 오류
         """
-        # bucket_name 추출
-        bucket_name = task_options.get("bucket_name")
+        # bucket_name 추출 (안전한 접근)
+        bucket_name = task_options.get("bucket_name") if task_options else None
         if not bucket_name:
             raise ERROR_REQUIRED_PARAMETER(
                 key="task_options.bucket_name"
             )  # 파라미터 없는 경우 오류 발생
+
+        # client가 설정되지 않은 경우 예외 발생
+        if not self.client:
+            from spaceone.core.error import ERROR_INVALID_PARAMETER
+
+            raise ERROR_INVALID_PARAMETER(
+                key="secret_data",
+                reason="Google Cloud Storage client가 초기화되지 않았습니다",
+            )
 
         # 버킷 객체 가져오기 (timeout 제거)
         bucket = self.client.get_bucket(bucket_name)  # 버킷 객체 가져오기

@@ -1,6 +1,15 @@
 SERVICE = "plugin"
 
-CONNECTORS = {"HTTPFileConnector": {}}
+CONNECTORS = {"HTTPFileConnector": {}, "GoogleStorageCollector": {}}
+
+MANAGERS = {"CostManager": {}, "DataSourceManager": {}, "JobManager": {}}
+
+HANDLERS = {
+    "authentication": [],
+    "authorization": [],
+    "mutation": [],
+    "event": [],
+}
 
 LOG = {
     "filters": {
